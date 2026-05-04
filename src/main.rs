@@ -6,6 +6,7 @@ use std::{
     io::{Result, stdin},
     os::unix::fs::PermissionsExt,
     path::PathBuf,
+    process::Command,
 };
 
 fn is_executable(metadata: &Metadata) -> bool {
@@ -75,7 +76,7 @@ fn main() {
             continue;
         }
 
-        let args = parts.collect::<Vec<&str>>().join(" ");
+        let args = parts.collect::<Vec<&str>>();
 
         let path = check_executable_exists(command.unwrap());
 
@@ -84,6 +85,6 @@ fn main() {
             continue;
         }
 
-        println!("{} {}", path.unwrap().display(), args)
+        Command::new(command.unwrap()).args(&args);
     }
 }
