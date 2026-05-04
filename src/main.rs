@@ -39,6 +39,7 @@ impl Shell {
             ("echo", Shell::builtin_echo),
             ("type", Shell::builtin_type),
             ("pwd", Shell::builtin_pwd),
+            ("cd", Shell::builtin_cd),
         ];
 
         let builtins = entries.iter().copied().collect();
@@ -71,6 +72,28 @@ impl Shell {
         }
     }
 
+    fn builtin_cd(&self, args: &[&str]) {
+        if args.len() > 1 {
+            eprintln!("Too many args for cd command")
+        }
+
+        let target = args[0];
+
+        let target = if target == "~" || target.starts_with("~/") {
+            let home = env::var("HOME").unwrap_or_default();
+            target.replacen("~", &home, 1)
+        } else {
+            target.to_string()
+        };
+
+        match std::env::set_current_dir(&target) {
+            Ok(()) => {}
+            Err(_) => {
+                eprintln!("cd: {}: No such file or directory", target);
+            }
+        }
+    }
+
     fn run(&self) {
         let stdin = io::stdin();
         loop {
@@ -92,7 +115,7 @@ impl Shell {
             }
 
             match get_command_path(cmd) {
-                Some(path) => {
+                Some(_) => {
                     let _ = Command::new(cmd).args(&args).status();
                 }
                 None => println!("{}: command not found", cmd),
