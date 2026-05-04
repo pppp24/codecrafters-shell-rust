@@ -15,7 +15,7 @@ fn is_executable(metadata: &Metadata) -> bool {
     permissions.mode() & 0o111 != 0
 }
 
-fn check_executable_exists(name: &str) -> Option<PathBuf> {
+fn get_command_path(name: &str) -> Option<PathBuf> {
     if let Some(paths) = env::var_os("PATH") {
         for mut dir in env::split_paths(&paths) {
             dir.push(name);
@@ -35,7 +35,6 @@ fn check_executable_exists(name: &str) -> Option<PathBuf> {
 
 fn main() {
     loop {
-        // TODO: Uncomment the code below to pass the first stage
         print!("$ ");
         io::stdout().flush().unwrap();
         let mut command: String = String::new();
@@ -58,7 +57,7 @@ fn main() {
                 continue;
             }
 
-            let path = check_executable_exists(rest);
+            let path = get_command_path(rest);
 
             if path.is_none() {
                 println!("{}: not found", rest);
@@ -78,7 +77,7 @@ fn main() {
 
         let args = parts.collect::<Vec<&str>>();
 
-        let path = check_executable_exists(command.unwrap());
+        let path = get_command_path(command.unwrap());
 
         if path.is_none() {
             println!("{}: command not found", command.unwrap().trim());
