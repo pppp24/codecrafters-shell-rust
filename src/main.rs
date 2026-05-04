@@ -10,7 +10,7 @@ fn main() {
         let mut command: String = String::new();
         stdin().read_line(&mut command).unwrap();
 
-        if command == "exit" {
+        if command.trim() == "exit" {
             break;
         }
 
