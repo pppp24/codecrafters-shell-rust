@@ -37,7 +37,7 @@ fn main() {
                 println!("{} is a shell builtin", rest);
                 continue;
             }
-
+            let mut found = false;
             if let Some(paths) = env::var_os("PATH") {
                 for mut dir in env::split_paths(&paths) {
                     dir.push(rest);
@@ -47,12 +47,17 @@ fn main() {
 
                         if is_executable {
                             println!("{} is {}", rest, dir.display());
+                            found = true;
+                            break;
                         }
                     }
                 }
             }
 
-            println!("{}: not found", rest);
+            if !found {
+                println!("{}: not found", rest);
+            }
+
             continue;
         }
 
