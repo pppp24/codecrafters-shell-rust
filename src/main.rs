@@ -10,6 +10,10 @@ fn main() {
         let mut command: String = String::new();
         stdin().read_line(&mut command).unwrap();
 
+        if command == "exit" {
+            break;
+        }
+
         println!("{}: command not found", command.trim());
     }
 }
