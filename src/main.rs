@@ -19,6 +19,18 @@ fn main() {
             continue;
         }
 
+        if command.starts_with("type ") {
+            let rest = command[5..].trim_end();
+
+            if rest == "exit" || rest == "echo" || rest == "type" {
+                println!("{} is a shell builtin", rest);
+                continue;
+            }
+
+            println!("{}: not found", rest);
+            continue;
+        }
+
         println!("{}: command not found", command.trim());
     }
 }
