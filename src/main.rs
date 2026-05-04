@@ -85,6 +85,6 @@ fn main() {
             continue;
         }
 
-        Command::new(command.unwrap()).args(&args);
+        let _ = Command::new(command.unwrap()).args(&args).status();
     }
 }
