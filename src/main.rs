@@ -93,7 +93,7 @@ impl Shell {
 
             match get_command_path(cmd) {
                 Some(path) => {
-                    let _ = Command::new(path).args(&args).status();
+                    let _ = Command::new(cmd).args(&args).status();
                 }
                 None => println!("{}: command not found", cmd),
             }
