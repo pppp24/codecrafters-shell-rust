@@ -15,7 +15,7 @@ fn main() {
         }
 
         if command.starts_with("echo ") {
-            println!("{}", &command[5..]);
+            println!("{}", &command[5..].trim_end());
             continue;
         }
 
