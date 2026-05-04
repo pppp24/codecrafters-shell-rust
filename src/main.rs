@@ -64,8 +64,11 @@ impl Shell {
         }
     }
 
-    fn builtin_pwd(&self, args: &[&str]) {
-        unimplemented!()
+    fn builtin_pwd(&self, _: &[&str]) {
+        match std::env::current_dir() {
+            Ok(p) => println!("{}", p.display()),
+            Err(e) => eprintln!("pwd: {}", e),
+        }
     }
 
     fn run(&self) {
