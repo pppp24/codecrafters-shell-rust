@@ -3,14 +3,34 @@ use std::io::{self, Write};
 use std::{
     env,
     fs::{self, Metadata},
-    io::stdin,
+    io::{Result, stdin},
     os::unix::fs::PermissionsExt,
+    path::PathBuf,
 };
 
 fn is_executable(metadata: &Metadata) -> bool {
     let permissions = metadata.permissions();
     // 0o111 mask checks the executable bit for owner 0o100, group 0o010, and others 0o001
     permissions.mode() & 0o111 != 0
+}
+
+fn check_executable_exists(name: &str) -> Option<PathBuf> {
+    if let Some(paths) = env::var_os("PATH") {
+        for mut dir in env::split_paths(&paths) {
+            dir.push(name);
+
+            if let Ok(metadata) = fs::metadata(&dir) {
+                let is_executable = metadata.is_file() && is_executable(&metadata);
+
+                if is_executable {
+                    println!("{} is {}", name, dir.display());
+                    return Some(dir);
+                }
+            }
+        }
+    }
+
+    return None;
 }
 
 fn main() {
@@ -37,30 +57,32 @@ fn main() {
                 println!("{} is a shell builtin", rest);
                 continue;
             }
-            let mut found = false;
-            if let Some(paths) = env::var_os("PATH") {
-                for mut dir in env::split_paths(&paths) {
-                    dir.push(rest);
 
-                    if let Ok(metadata) = fs::metadata(&dir) {
-                        let is_executable = metadata.is_file() && is_executable(&metadata);
+            let path = check_executable_exists(rest);
 
-                        if is_executable {
-                            println!("{} is {}", rest, dir.display());
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if !found {
+            if path.is_none() {
                 println!("{}: not found", rest);
             }
 
             continue;
         }
 
-        println!("{}: command not found", command.trim());
+        let mut parts = command.split_whitespace();
+        let command = parts.next();
+
+        if command.is_none() {
+            continue;
+        }
+
+        let args = parts.collect::<Vec<&str>>().join(" ");
+
+        let path = check_executable_exists(command.unwrap());
+
+        if path.is_none() {
+            println!("{}: command not found", command.unwrap().trim());
+            continue;
+        }
+
+        println!("{} {}", path.unwrap().to_str().unwrap(), args)
     }
 }
