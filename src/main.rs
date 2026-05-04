@@ -23,7 +23,6 @@ fn check_executable_exists(name: &str) -> Option<PathBuf> {
                 let is_executable = metadata.is_file() && is_executable(&metadata);
 
                 if is_executable {
-                    println!("{} is {}", name, dir.display());
                     return Some(dir);
                 }
             }
@@ -62,6 +61,8 @@ fn main() {
 
             if path.is_none() {
                 println!("{}: not found", rest);
+            } else {
+                println!("{} is {}", rest, path.unwrap().display());
             }
 
             continue;
@@ -83,6 +84,6 @@ fn main() {
             continue;
         }
 
-        println!("{} {}", path.unwrap().to_str().unwrap(), args)
+        println!("{} {}", path.unwrap().display(), args)
     }
 }
