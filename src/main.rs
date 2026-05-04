@@ -51,7 +51,7 @@ impl Shell {
     }
 
     fn builtin_echo(&self, args: &[&str]) {
-        println!("{}", args.join(" "));
+        println!("{}", args.join(" ").replace("'", ""));
     }
 
     fn builtin_type(&self, args: &[&str]) {
