@@ -1,4 +1,3 @@
-use crate::tokenizer::tokenize;
 use std::collections::HashMap;
 use std::fs::Metadata;
 use std::io::{self, BufRead, Write};
@@ -6,6 +5,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::{env, fs};
+
+use crate::lexer::lex;
 
 fn is_executable(metadata: &Metadata) -> bool {
     let permissions = metadata.permissions();
@@ -38,14 +39,19 @@ fn read_command(stdin: &io::Stdin) -> Option<Vec<String>> {
         let mut line = String::new();
         let bytes = stdin.lock().read_line(&mut line).unwrap();
         if bytes == 0 {
-            return None; // EOF (Ctrl-D on empty line)
+            if buffer.is_empty() {
+                return None;
+            } else {
+                eprintln!("shell: unexpected EOF while looking for matching quote");
+                return Some(vec![]); // continuation EOF -> cancel + re-prompt
+            }
         }
 
         buffer.push_str(&line);
 
-        let (tokens, unterminated) = tokenize(&buffer);
+        let (tokens, unterminated) = lex(&buffer);
         if !unterminated {
-            return Some(tokens);
+            return Some(tokens.into_iter().map(|token| token.literal).collect());
         }
 
         // Quote still open - print continuation prompt and read another line.

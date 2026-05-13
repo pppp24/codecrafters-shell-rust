@@ -1,5 +1,6 @@
+mod lexer;
 mod shell;
-mod tokenizer;
+mod token;
 
 fn main() {
     shell::Shell::new().run();
