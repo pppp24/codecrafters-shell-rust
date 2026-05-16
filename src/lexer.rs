@@ -27,16 +27,14 @@ impl Lexer {
         self.skip_whitespace();
 
         let tok = match self.ch {
-            '\0' => Token::new(crate::token::TokenType::Eof, ""),
+            '\0' => Token::new(TokenType::Eof, ""),
             '|' => {
                 unreachable!()
             }
             '&' => {
                 unreachable!()
             }
-            '>' => {
-                unreachable!()
-            }
+            '>' => Token::new(TokenType::Gt, '>'),
             '<' => {
                 unreachable!()
             }
@@ -44,6 +42,21 @@ impl Lexer {
                 unreachable!()
             }
             _ => {
+                if self.ch.is_ascii_digit() {
+                    let mut digits = String::new();
+                    while self.ch.is_ascii_digit() {
+                        digits.push(self.ch);
+                        self.read_char();
+                    }
+
+                    if self.ch == '>' {
+                        return Token::new(TokenType::IoNumber, digits);
+                    }
+
+                    let rest = self.read_word();
+                    return Token::new(TokenType::Word, format!("{}{}", digits, rest));
+                }
+
                 // Anything else starts a Word - possibly with embedded
                 // quotes and variable expansion.
                 let literal = self.read_word();
@@ -457,5 +470,130 @@ mod tests {
     fn four_quotes_report_closed() {
         // even number of quotes => balanced
         assert!(!open("'a'b'c'"));
+    }
+
+    // --- redirection operators (Layer 4) ---
+
+    /// Helper for tests that need token kinds, not just literals.
+    /// Returns (type, literal) pairs with the trailing Eof stripped.
+    fn typed_tok(input: &str) -> Vec<(TokenType, String)> {
+        lex(input)
+            .0
+            .into_iter()
+            .filter(|t| t.r#type != TokenType::Eof)
+            .map(|t| (t.r#type, t.literal))
+            .collect()
+    }
+
+    #[test]
+    fn redirect_out_emits_gt() {
+        assert_eq!(
+            typed_tok("echo > foo"),
+            vec![
+                (TokenType::Word, "echo".into()),
+                (TokenType::Gt, ">".into()),
+                (TokenType::Word, "foo".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn redirect_out_glued_to_words() {
+        // `>` is a word terminator, so no whitespace is required around it
+        assert_eq!(
+            typed_tok("echo>foo"),
+            vec![
+                (TokenType::Word, "echo".into()),
+                (TokenType::Gt, ">".into()),
+                (TokenType::Word, "foo".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn bare_redirect_operator() {
+        assert_eq!(typed_tok(">"), vec![(TokenType::Gt, ">".into())]);
+    }
+
+    #[test]
+    fn double_redirect_operator_lexes_normally() {
+        // `echo > > foo` is a syntax error, but the lexer emits tokens normally;
+        // detecting the error is the parser's job.
+        assert_eq!(
+            typed_tok("echo > > foo"),
+            vec![
+                (TokenType::Word, "echo".into()),
+                (TokenType::Gt, ">".into()),
+                (TokenType::Gt, ">".into()),
+                (TokenType::Word, "foo".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn io_number_with_space_after_operator() {
+        assert_eq!(
+            typed_tok("echo 1> foo"),
+            vec![
+                (TokenType::Word, "echo".into()),
+                (TokenType::IoNumber, "1".into()),
+                (TokenType::Gt, ">".into()),
+                (TokenType::Word, "foo".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn io_number_glued_to_operator_and_target() {
+        assert_eq!(
+            typed_tok("echo 1>foo"),
+            vec![
+                (TokenType::Word, "echo".into()),
+                (TokenType::IoNumber, "1".into()),
+                (TokenType::Gt, ">".into()),
+                (TokenType::Word, "foo".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn io_number_multi_digit() {
+        // POSIX places no upper bound on the fd in an IO_NUMBER
+        assert_eq!(
+            typed_tok("echo 99>foo"),
+            vec![
+                (TokenType::Word, "echo".into()),
+                (TokenType::IoNumber, "99".into()),
+                (TokenType::Gt, ">".into()),
+                (TokenType::Word, "foo".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn digit_separated_from_operator_by_space_is_a_word() {
+        // whitespace between the digits and `>` means the digits are an
+        // ordinary argument, not an fd prefix
+        assert_eq!(
+            typed_tok("echo 1 > foo"),
+            vec![
+                (TokenType::Word, "echo".into()),
+                (TokenType::Word, "1".into()),
+                (TokenType::Gt, ">".into()),
+                (TokenType::Word, "foo".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn digit_run_not_before_operator_is_a_word() {
+        // digits followed by non-redirect characters fold into a normal word
+        assert_eq!(typed_tok("12foo"), vec![(TokenType::Word, "12foo".into())]);
+    }
+
+    #[test]
+    fn digit_run_at_eof_is_a_word() {
+        // digits with nothing after them: the read_word fallthrough yields ""
+        assert_eq!(typed_tok("12"), vec![(TokenType::Word, "12".into())]);
     }
 }

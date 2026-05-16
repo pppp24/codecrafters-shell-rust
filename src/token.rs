@@ -1,7 +1,9 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenType {
     // Literals
-    Word, // a bare word or quoted string after expansion
+    Word,     // a bare word or quoted string after expansion
+    Gt,       // >
+    IoNumber, // digit-run immediately preceding > or <
 
     // Operators
     // Pipe,        // |

@@ -1,17 +1,23 @@
 use std::collections::HashMap;
-use std::fs::Metadata;
+use std::fs::{File, Metadata, OpenOptions};
+use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
 use std::{env, fs};
 
-use crate::ast::SimpleCommand;
+use crate::ast::{RedirOp, Redirection, SimpleCommand};
 
 pub struct Evaluator {
     builtins: HashMap<&'static str, BuiltinFn>,
 }
 
-type BuiltinFn = fn(&Evaluator, &[&str]);
+type BuiltinFn = fn(&Evaluator, &[&str], &mut Stdio);
+
+pub struct Stdio<'a> {
+    pub out: &'a mut dyn Write,
+    pub err: &'a mut dyn Write,
+}
 
 impl Evaluator {
     pub fn new() -> Self {
@@ -28,54 +34,85 @@ impl Evaluator {
     }
 
     pub fn eval(&self, cmd: &SimpleCommand) {
-        let (cmd, args) = cmd.argv.split_first().expect("Unexpected empty argv list");
+        let stdout_file = open_stdout_target(&cmd.redirs);
+
+        let (name, args) = cmd.argv.split_first().expect("Unexpected empty argv list");
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
 
-        if let Some(builtin) = self.builtins.get(cmd.as_str()) {
-            builtin(self, &args);
+        if let Some(builtin) = self.builtins.get(name.as_str()) {
+            let mut stdout_writer: Box<dyn Write> = match &stdout_file {
+                Some(f) => Box::new(f),
+                None => Box::new(io::stdout()),
+            };
+
+            let stderr = io::stderr();
+            let mut stderr_writer = stderr.lock();
+
+            let mut stdio = Stdio {
+                out: &mut *stdout_writer,
+                err: &mut stderr_writer,
+            };
+
+            builtin(self, &args, &mut stdio);
             return;
         }
 
-        match get_command_path(cmd) {
+        match get_command_path(name) {
             Some(_) => {
-                let _ = Command::new(cmd).args(&args).status();
+                let mut command = Command::new(name);
+                command.args(&args);
+
+                if let Some(f) = stdout_file {
+                    command.stdout(f);
+                }
+
+                let _ = command.status();
             }
-            None => println!("{}: command not found", cmd),
+            None => {
+                let stderr = io::stderr();
+                let mut stderr_writer = stderr.lock();
+
+                let _ = writeln!(stderr_writer, "{}: command not found", name);
+            }
         }
     }
 
-    fn builtin_exit(&self, _args: &[&str]) {
+    fn builtin_exit(&self, _: &[&str], _: &mut Stdio) {
         std::process::exit(0);
     }
 
-    fn builtin_echo(&self, args: &[&str]) {
-        println!("{}", args.join(" "));
+    fn builtin_echo(&self, args: &[&str], stdio: &mut Stdio) {
+        let _ = writeln!(stdio.out, "{}", args.join(" "));
     }
 
-    fn builtin_type(&self, args: &[&str]) {
+    fn builtin_type(&self, args: &[&str], stdio: &mut Stdio) {
         let Some(name) = args.first() else { return };
         if self.builtins.contains_key(name) {
-            println!("{} is a shell builtin", name);
+            let _ = writeln!(stdio.out, "{} is a shell builtin", name);
         } else if let Some(path) = get_command_path(name) {
-            println!("{} is {}", name, path.display());
+            let _ = writeln!(stdio.out, "{} is {}", name, path.display());
         } else {
-            println!("{}: not found", name);
+            let _ = writeln!(stdio.err, "{}: not found", name);
         }
     }
 
-    fn builtin_pwd(&self, _: &[&str]) {
+    fn builtin_pwd(&self, _: &[&str], stdio: &mut Stdio) {
         match std::env::current_dir() {
-            Ok(p) => println!("{}", p.display()),
-            Err(e) => eprintln!("pwd: {}", e),
+            Ok(p) => {
+                let _ = writeln!(stdio.out, "{}", p.display());
+            }
+            Err(e) => {
+                let _ = writeln!(stdio.err, "pwd: {}", e);
+            }
         }
     }
 
-    fn builtin_cd(&self, args: &[&str]) {
+    fn builtin_cd(&self, args: &[&str], stdio: &mut Stdio) {
         if args.len() > 1 {
-            eprintln!("Too many args for cd command")
+            let _ = writeln!(stdio.err, "Too many args for cd command");
         }
 
-        let target = args[0];
+        let target = args.first().copied().unwrap_or("~");
 
         let target = if target == "~" || target.starts_with("~/") {
             let home = env::var("HOME").unwrap_or_default();
@@ -87,7 +124,7 @@ impl Evaluator {
         match std::env::set_current_dir(&target) {
             Ok(()) => {}
             Err(_) => {
-                eprintln!("cd: {}: No such file or directory", target);
+                let _ = writeln!(stdio.err, "cd: {}: No such file or directory", target);
             }
         }
     }
@@ -112,4 +149,26 @@ fn get_command_path(name: &str) -> Option<PathBuf> {
         }
     }
     return None;
+}
+
+fn open_stdout_target(redirs: &[Redirection]) -> Option<File> {
+    let mut active: Option<File> = None;
+
+    for r in redirs {
+        if r.op == RedirOp::Out && r.fd == 1 {
+            match OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&r.target)
+            {
+                Ok(f) => active = Some(f),
+                Err(e) => {
+                    eprintln!("unexpected error encountered during file handling: {}", e);
+                }
+            }
+        }
+    }
+
+    active
 }

@@ -1,5 +1,5 @@
 use crate::{
-    ast::SimpleCommand,
+    ast::{RedirOp, Redirection, SimpleCommand},
     token::{Token, TokenType},
 };
 
@@ -19,13 +19,61 @@ impl Parser {
     }
     pub fn parse(&mut self) -> Option<SimpleCommand> {
         let mut words = vec![];
-
+        let mut redirs: Vec<Redirection> = vec![];
         loop {
             match self.cur_token() {
                 Token {
                     r#type: TokenType::Word,
                     literal,
                 } => words.push(literal.clone()),
+                Token {
+                    r#type: TokenType::IoNumber,
+                    literal,
+                } => {
+                    let literal = literal.clone();
+                    if self.peek_token().r#type != TokenType::Gt {
+                        eprintln!("unexpected isolated IoNumber");
+                        return None;
+                    }
+                    self.advance(); // consume Gt
+                    self.advance(); // position on target
+
+                    let fd = match literal.parse::<u32>() {
+                        Ok(fd) => fd,
+                        Err(e) => {
+                            eprintln!("invalid IoNumber type: {}", e);
+                            return None;
+                        }
+                    };
+
+                    if self.cur_token().r#type != TokenType::Word {
+                        eprintln!("unexpected non-word token: {:?}", self.cur_token());
+                        return None;
+                    }
+
+                    redirs.push(Redirection {
+                        fd,
+                        op: RedirOp::Out,
+                        target: self.cur_token().clone().literal,
+                    })
+                }
+                Token {
+                    r#type: TokenType::Gt,
+                    ..
+                } => {
+                    self.advance(); // consume Gt
+
+                    if self.cur_token().r#type != TokenType::Word {
+                        eprintln!("unexpected non-word token: {:?}", self.cur_token());
+                        return None;
+                    }
+
+                    redirs.push(Redirection {
+                        fd: 1,
+                        op: RedirOp::Out,
+                        target: self.cur_token().clone().literal,
+                    })
+                }
                 Token {
                     r#type: TokenType::Eof,
                     ..
@@ -42,7 +90,10 @@ impl Parser {
         if words.is_empty() {
             None
         } else {
-            Some(SimpleCommand { argv: words })
+            Some(SimpleCommand {
+                argv: words,
+                redirs,
+            })
         }
     }
 
