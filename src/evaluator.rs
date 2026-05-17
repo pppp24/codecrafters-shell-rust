@@ -34,7 +34,8 @@ impl Evaluator {
     }
 
     pub fn eval(&self, cmd: &SimpleCommand) {
-        let stdout_file = open_stdout_target(&cmd.redirs);
+        let stdout_file = open_redir_target(&cmd.redirs, 1);
+        let stderr_file = open_redir_target(&cmd.redirs, 2);
 
         let (name, args) = cmd.argv.split_first().expect("Unexpected empty argv list");
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -45,12 +46,14 @@ impl Evaluator {
                 None => Box::new(io::stdout()),
             };
 
-            let stderr = io::stderr();
-            let mut stderr_writer = stderr.lock();
+            let mut stderr_writer: Box<dyn Write> = match &stderr_file {
+                Some(f) => Box::new(f),
+                None => Box::new(io::stderr()),
+            };
 
             let mut stdio = Stdio {
                 out: &mut *stdout_writer,
-                err: &mut stderr_writer,
+                err: &mut *stderr_writer,
             };
 
             builtin(self, &args, &mut stdio);
@@ -151,11 +154,11 @@ fn get_command_path(name: &str) -> Option<PathBuf> {
     return None;
 }
 
-fn open_stdout_target(redirs: &[Redirection]) -> Option<File> {
+fn open_redir_target(redirs: &[Redirection], fd: u32) -> Option<File> {
     let mut active: Option<File> = None;
 
     for r in redirs {
-        if r.op == RedirOp::Out && r.fd == 1 {
+        if r.op == RedirOp::Out && r.fd == fd {
             match OpenOptions::new()
                 .write(true)
                 .create(true)
