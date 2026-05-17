@@ -69,6 +69,10 @@ impl Evaluator {
                     command.stdout(f);
                 }
 
+                if let Some(f) = stderr_file {
+                    command.stderr(f);
+                }
+
                 let _ = command.status();
             }
             None => {
