@@ -74,7 +74,7 @@ impl Parser {
 
                     let mut redir_op = RedirOp::Out;
 
-                    if self.peek_token().r#type == TokenType::Gt {
+                    if self.cur_token().r#type == TokenType::Gt {
                         self.advance(); // consume Gt
                         redir_op = RedirOp::Append;
                     }
