@@ -12,4 +12,5 @@ pub struct Redirection {
 #[derive(Debug, PartialEq)]
 pub enum RedirOp {
     Out,
+    Append,
 }

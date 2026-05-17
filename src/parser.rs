@@ -35,7 +35,16 @@ impl Parser {
                         eprintln!("unexpected isolated IoNumber");
                         return None;
                     }
+
                     self.advance(); // consume Gt
+
+                    let mut redir_op = RedirOp::Out;
+
+                    if self.peek_token().r#type == TokenType::Gt {
+                        self.advance(); // consume Gt
+                        redir_op = RedirOp::Append;
+                    }
+
                     self.advance(); // position on target
 
                     let fd = match literal.parse::<u32>() {
@@ -53,7 +62,7 @@ impl Parser {
 
                     redirs.push(Redirection {
                         fd,
-                        op: RedirOp::Out,
+                        op: redir_op,
                         target: self.cur_token().clone().literal,
                     })
                 }
@@ -63,6 +72,13 @@ impl Parser {
                 } => {
                     self.advance(); // consume Gt
 
+                    let mut redir_op = RedirOp::Out;
+
+                    if self.peek_token().r#type == TokenType::Gt {
+                        self.advance(); // consume Gt
+                        redir_op = RedirOp::Append;
+                    }
+
                     if self.cur_token().r#type != TokenType::Word {
                         eprintln!("unexpected non-word token: {:?}", self.cur_token());
                         return None;
@@ -70,7 +86,7 @@ impl Parser {
 
                     redirs.push(Redirection {
                         fd: 1,
-                        op: RedirOp::Out,
+                        op: redir_op,
                         target: self.cur_token().clone().literal,
                     })
                 }

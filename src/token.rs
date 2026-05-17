@@ -8,8 +8,6 @@ pub enum TokenType {
     // Operators
     // Pipe,        // |
     // RedirectIn,  //
-    // RedirectOut, // >
-    // AppendOut,   // >>
     // And,         // &&
     // Or,          // ||
     // Semicolon,   // ;

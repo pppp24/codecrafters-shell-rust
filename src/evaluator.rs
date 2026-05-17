@@ -177,6 +177,20 @@ fn open_redir_target(redirs: &[Redirection], fd: u32) -> Option<File> {
                 }
             }
         }
+
+        if r.op == RedirOp::Append && r.fd == fd {
+            match OpenOptions::new()
+                .write(true)
+                .create(true)
+                .append(true)
+                .open(&r.target)
+            {
+                Ok(f) => active = Some(f),
+                Err(e) => {
+                    eprintln!("unexpected error encountered during file handling: {}", e);
+                }
+            }
+        }
     }
 
     active
