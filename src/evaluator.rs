@@ -77,7 +77,7 @@ impl Evaluator {
                     None => Box::new(io::stderr()),
                 };
 
-                let _ = writeln!(stderr_writer, "{}: command not found", name);
+                let _ = writeln!(*stderr_writer, "{}: command not found", name);
             }
         }
     }
