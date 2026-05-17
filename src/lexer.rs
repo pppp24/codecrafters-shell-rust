@@ -34,7 +34,14 @@ impl Lexer {
             '&' => {
                 unreachable!()
             }
-            '>' => Token::new(TokenType::Gt, '>'),
+            '>' => {
+                if self.peek_char() == '>' {
+                    self.read_char();
+                    Token::new(TokenType::GtGt, ">>")
+                } else {
+                    Token::new(TokenType::Gt, '>')
+                }
+            }
             '<' => {
                 unreachable!()
             }
@@ -595,5 +602,93 @@ mod tests {
     fn digit_run_at_eof_is_a_word() {
         // digits with nothing after them: the read_word fallthrough yields ""
         assert_eq!(typed_tok("12"), vec![(TokenType::Word, "12".into())]);
+    }
+
+    // --- append operator (>>) ---
+
+    #[test]
+    fn append_out_emits_gtgt() {
+        assert_eq!(
+            typed_tok("echo >> foo"),
+            vec![
+                (TokenType::Word, "echo".into()),
+                (TokenType::GtGt, ">>".into()),
+                (TokenType::Word, "foo".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn append_out_glued_to_words() {
+        // `>` terminates a word, so no whitespace is required around `>>`
+        assert_eq!(
+            typed_tok("echo>>foo"),
+            vec![
+                (TokenType::Word, "echo".into()),
+                (TokenType::GtGt, ">>".into()),
+                (TokenType::Word, "foo".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn bare_append_operator() {
+        assert_eq!(typed_tok(">>"), vec![(TokenType::GtGt, ">>".into())]);
+    }
+
+    #[test]
+    fn io_number_before_append() {
+        assert_eq!(
+            typed_tok("echo 1>>foo"),
+            vec![
+                (TokenType::Word, "echo".into()),
+                (TokenType::IoNumber, "1".into()),
+                (TokenType::GtGt, ">>".into()),
+                (TokenType::Word, "foo".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn io_number_before_append_with_space() {
+        assert_eq!(
+            typed_tok("echo 2>> foo"),
+            vec![
+                (TokenType::Word, "echo".into()),
+                (TokenType::IoNumber, "2".into()),
+                (TokenType::GtGt, ">>".into()),
+                (TokenType::Word, "foo".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn spaced_redirects_are_two_gt_not_gtgt() {
+        // `> >` (whitespace between) must stay two separate `Gt` tokens —
+        // only adjacent `>>` pairs into a single `GtGt`. This is what lets
+        // the parser reject `> >` as a syntax error while accepting `>>`.
+        assert_eq!(
+            typed_tok("echo > > foo"),
+            vec![
+                (TokenType::Word, "echo".into()),
+                (TokenType::Gt, ">".into()),
+                (TokenType::Gt, ">".into()),
+                (TokenType::Word, "foo".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn triple_redirect_pairs_greedily() {
+        // `>>>` pairs the first two into `GtGt`; the third is a lone `Gt`
+        assert_eq!(
+            typed_tok("echo >>> foo"),
+            vec![
+                (TokenType::Word, "echo".into()),
+                (TokenType::GtGt, ">>".into()),
+                (TokenType::Gt, ">".into()),
+                (TokenType::Word, "foo".into()),
+            ]
+        );
     }
 }

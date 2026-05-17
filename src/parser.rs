@@ -31,20 +31,18 @@ impl Parser {
                     literal,
                 } => {
                     let literal = literal.clone();
-                    if self.peek_token().r#type != TokenType::Gt {
+                    if !matches!(self.peek_token().r#type, TokenType::Gt | TokenType::GtGt) {
                         eprintln!("unexpected isolated IoNumber");
                         return None;
                     }
 
-                    self.advance(); // consume Gt
-
                     let mut redir_op = RedirOp::Out;
 
-                    if self.peek_token().r#type == TokenType::Gt {
-                        self.advance(); // consume Gt
+                    if self.peek_token().r#type == TokenType::GtGt {
                         redir_op = RedirOp::Append;
                     }
 
+                    self.advance(); // consume Gt or GtGt
                     self.advance(); // position on target
 
                     let fd = match literal.parse::<u32>() {
@@ -72,12 +70,22 @@ impl Parser {
                 } => {
                     self.advance(); // consume Gt
 
-                    let mut redir_op = RedirOp::Out;
-
-                    if self.cur_token().r#type == TokenType::Gt {
-                        self.advance(); // consume Gt
-                        redir_op = RedirOp::Append;
+                    if self.cur_token().r#type != TokenType::Word {
+                        eprintln!("unexpected non-word token: {:?}", self.cur_token());
+                        return None;
                     }
+
+                    redirs.push(Redirection {
+                        fd: 1,
+                        op: RedirOp::Out,
+                        target: self.cur_token().clone().literal,
+                    })
+                }
+                Token {
+                    r#type: TokenType::GtGt,
+                    ..
+                } => {
+                    self.advance(); // consume GtGt
 
                     if self.cur_token().r#type != TokenType::Word {
                         eprintln!("unexpected non-word token: {:?}", self.cur_token());
@@ -86,7 +94,7 @@ impl Parser {
 
                     redirs.push(Redirection {
                         fd: 1,
-                        op: redir_op,
+                        op: RedirOp::Append,
                         target: self.cur_token().clone().literal,
                     })
                 }

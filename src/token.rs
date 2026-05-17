@@ -3,6 +3,7 @@ pub enum TokenType {
     // Literals
     Word,     // a bare word or quoted string after expansion
     Gt,       // >
+    GtGt,     // >>
     IoNumber, // digit-run immediately preceding > or <
 
     // Operators
