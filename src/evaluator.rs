@@ -72,8 +72,10 @@ impl Evaluator {
                 let _ = command.status();
             }
             None => {
-                let stderr = io::stderr();
-                let mut stderr_writer = stderr.lock();
+                let mut stderr_writer: Box<dyn Write> = match &stderr_file {
+                    Some(f) => Box::new(f),
+                    None => Box::new(io::stderr()),
+                };
 
                 let _ = writeln!(stderr_writer, "{}: command not found", name);
             }
