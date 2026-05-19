@@ -1,0 +1,232 @@
+#!/usr/bin/env expect
+#
+# Regression suite for the raw-mode line editor + builtin completion (Layer 5).
+#
+# These tests drive the shell under a pseudo-terminal, which exercises the
+# INTERACTIVE (raw-mode) code path: termios raw mode, the byte-by-byte read
+# loop, echo, Backspace, escape-sequence swallowing, and Tab completion.
+# Piped stdin cannot reach any of this — it takes the cooked isatty-fallback
+# branch instead — so these behaviours are otherwise untested.
+#
+# Usage:    expect tests/line_editor.exp        (runs from anywhere)
+# Install:  brew install expect                 (if `expect` is missing)
+#
+# Exit code: 0 if all pass, 1 if any fail, 2 on a harness/build error.
+
+# Run from the project root regardless of where this was invoked.
+cd [file join [file dirname [info script]] ..]
+
+set SHELL_BIN "./target/debug/codecrafters-shell"
+set timeout 5
+log_user 0          ;# suppress the shell's own output; show only PASS/FAIL
+
+set passed 0
+set failed 0
+
+proc pass {name} {
+    global passed
+    incr passed
+    puts "  ok   - $name"
+}
+
+proc fail {name why} {
+    global failed
+    incr failed
+    puts "  FAIL - $name  ($why)"
+}
+
+# Spawn a fresh shell and sync on the first prompt.
+proc boot {} {
+    global SHELL_BIN
+    spawn $SHELL_BIN
+    expect {
+        -ex {$ } {}
+        timeout  { puts "FATAL: shell printed no startup prompt"; exit 2 }
+        eof      { puts "FATAL: shell exited before prompting";   exit 2 }
+    }
+}
+
+# Tear down the current spawn (tolerate it having already exited).
+proc shutdown {} {
+    catch { close }
+    catch { wait }
+}
+
+# --- preconditions ----------------------------------------------------------
+
+puts "building shell ..."
+if {[catch {exec -ignorestderr cargo build} err]} {
+    puts "FATAL: cargo build failed:\n$err"
+    exit 2
+}
+if {![file exists $SHELL_BIN]} {
+    puts "FATAL: $SHELL_BIN not found after build"
+    exit 2
+}
+
+# The spawned shell inherits this directory as its cwd, so `pwd` output
+# equals [pwd] — used as a marker that a command actually executed.
+set cwd [pwd]
+
+puts "running line-editor regression suite\n"
+
+# --- completion: a unique prefix completes ----------------------------------
+
+boot
+send "ech\t"
+expect {
+    -ex "echo " { pass "completion: 'ech' + Tab -> 'echo '" }
+    timeout     { fail "completion: 'ech' + Tab -> 'echo '" "no completion appeared" }
+}
+shutdown
+
+boot
+send "ex\t"
+expect {
+    -ex "exit " { pass "completion: 'ex' + Tab -> 'exit '" }
+    timeout     { fail "completion: 'ex' + Tab -> 'exit '" "no completion appeared" }
+}
+shutdown
+
+boot
+send "typ\t"
+expect {
+    -ex "type " { pass "completion: 'typ' + Tab -> 'type '" }
+    timeout     { fail "completion: 'typ' + Tab -> 'type '" "no completion appeared" }
+}
+shutdown
+
+boot
+send "pw\t"
+expect {
+    -ex "pwd " { pass "completion: 'pw' + Tab -> 'pwd '" }
+    timeout    { fail "completion: 'pw' + Tab -> 'pwd '" "no completion appeared" }
+}
+shutdown
+
+boot
+send "c\t"
+expect {
+    -ex "cd " { pass "completion: 'c' + Tab -> 'cd ' (unique prefix)" }
+    timeout   { fail "completion: 'c' + Tab -> 'cd '" "no completion appeared" }
+}
+shutdown
+
+# An already-complete builtin name + Tab still appends the trailing space.
+boot
+send "echo\t"
+expect {
+    -ex "echo " { pass "completion: exact 'echo' + Tab -> 'echo ' (adds space)" }
+    timeout     { fail "completion: exact 'echo' + Tab" "no trailing space appended" }
+}
+shutdown
+
+# --- completion produces a runnable command ---------------------------------
+
+boot
+send "pw\t\r"
+expect {
+    -ex $cwd { pass "completion: 'pw' + Tab + Enter executes pwd" }
+    timeout  { fail "completion: 'pw' + Tab + Enter executes pwd" "pwd output not seen" }
+}
+shutdown
+
+# --- ambiguous / no-match: the buffer must be left untouched ----------------
+# Verified indirectly: complete-then-run, and assert the command that runs is
+# exactly what was typed. If Tab had wrongly mutated the buffer, a different
+# command (or none) would run.
+
+boot
+send "e\t\r"
+expect {
+    -ex "e: command not found" { pass "completion: ambiguous 'e' + Tab leaves buffer = 'e'" }
+    timeout { fail "completion: ambiguous 'e' + Tab" "buffer was altered or no error seen" }
+}
+shutdown
+
+boot
+send "xyz\t\r"
+expect {
+    -ex "xyz: command not found" { pass "completion: no-match 'xyz' + Tab leaves buffer = 'xyz'" }
+    timeout { fail "completion: no-match 'xyz' + Tab" "buffer was altered or no error seen" }
+}
+shutdown
+
+# --- Backspace edits the buffer ---------------------------------------------
+# Type 'pwdX', Backspace once -> 'pwd', Enter. pwd runs only if the X was
+# actually removed; otherwise 'pwdX: command not found'.
+
+boot
+send "pwdX"
+send "\x7f"
+send "\r"
+expect {
+    -ex $cwd { pass "backspace: 'pwdX' + BS + Enter corrects buffer to 'pwd'" }
+    timeout  { fail "backspace: 'pwdX' + BS + Enter" "buffer not corrected to 'pwd'" }
+}
+shutdown
+
+# --- a plain, un-completed builtin still runs -------------------------------
+
+boot
+send "type echo\r"
+expect {
+    -ex "echo is a shell builtin" { pass "plain command: 'type echo' executes" }
+    timeout { fail "plain command: 'type echo' executes" "expected output not seen" }
+}
+shutdown
+
+# --- an arrow-key escape sequence is swallowed, not injected ----------------
+# Send Up-arrow (ESC [ A), then 'pwd'. If the sequence leaked, the buffer
+# would be '[Apwd' and pwd would not run.
+
+boot
+send "\x1b\[A"
+send "pwd\r"
+expect {
+    -ex $cwd { pass "escape: Up-arrow swallowed, 'pwd' still runs clean" }
+    timeout  { fail "escape: Up-arrow swallowed" "arrow likely corrupted the buffer" }
+}
+shutdown
+
+# --- an unterminated quote triggers the continuation prompt -----------------
+
+boot
+send "echo 'hi\r"
+expect {
+    -ex "> " {
+        send "there'\r"
+        expect {
+            -ex "hi\r\nthere" { pass "continuation: multi-line quote joins with a newline" }
+            timeout { fail "continuation: multi-line quote" "joined output not seen" }
+        }
+    }
+    timeout { fail "continuation: unterminated quote -> '> ' prompt" "no continuation prompt" }
+}
+shutdown
+
+# --- Ctrl-D on an empty line exits the shell --------------------------------
+
+boot
+send "\x04"
+expect {
+    eof     { pass "Ctrl-D on an empty line exits the shell" }
+    timeout { fail "Ctrl-D on an empty line exits the shell" "shell did not exit" }
+}
+shutdown
+
+# --- the `exit` builtin terminates the shell --------------------------------
+
+boot
+send "exit\r"
+expect {
+    eof     { pass "'exit' builtin terminates the shell" }
+    timeout { fail "'exit' builtin terminates the shell" "shell did not exit" }
+}
+shutdown
+
+# --- summary ----------------------------------------------------------------
+
+puts ""
+puts "  $passed passed, $failed failed"
+exit [expr {$failed > 0 ? 1 : 0}]

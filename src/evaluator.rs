@@ -137,6 +137,10 @@ impl Evaluator {
             }
         }
     }
+
+    pub fn builtin_names(&self) -> Vec<&'static str> {
+        self.builtins.keys().copied().collect()
+    }
 }
 
 fn is_executable(metadata: &Metadata) -> bool {
