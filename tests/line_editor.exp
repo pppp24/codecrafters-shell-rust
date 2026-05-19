@@ -2,23 +2,33 @@
 #
 # Regression suite for the raw-mode line editor + builtin completion (Layer 5).
 #
-# These tests drive the shell under a pseudo-terminal, which exercises the
-# INTERACTIVE (raw-mode) code path: termios raw mode, the byte-by-byte read
-# loop, echo, Backspace, escape-sequence swallowing, and Tab completion.
-# Piped stdin cannot reach any of this — it takes the cooked isatty-fallback
-# branch instead — so these behaviours are otherwise untested.
+# Runs the shell under a pseudo-terminal, exercising the interactive raw-mode
+# path (termios raw mode, byte loop, echo, Backspace, escape swallowing, Tab
+# completion) — which piped stdin cannot reach.
 #
-# Usage:    expect tests/line_editor.exp        (runs from anywhere)
-# Install:  brew install expect                 (if `expect` is missing)
+# Teardown — `close` then `wait`, in that order:
+#   `spawn` allocates a pty; the master fd is held by THIS expect process, not
+#   the child. Killing the child (`kill` + `wait`) reaps the process but leaks
+#   the master fd, so the pty device stays allocated — do that per test and
+#   the system-wide pty pool exhausts, hanging a later `spawn`.
+#   `close` releases the master fd (and sends the child EOF, so it exits on
+#   its own); `wait` then reaps it. close-before-wait, with no prior kill, is
+#   the order that frees the pty cleanly.
 #
-# Exit code: 0 if all pass, 1 if any fail, 2 on a harness/build error.
+# No settle sleeps: the shell prints its prompt only AFTER entering raw mode
+# (layer_5 decision #7), so matching a prompt guarantees raw mode is engaged
+# and the next keystrokes won't be lost to raw-mode entry's TCSAFLUSH.
+#
+# Usage:    cargo build && expect tests/line_editor.exp   (run from anywhere)
+# Install:  brew install expect
+#
+# Exit code: 0 if all pass, 1 if any fail, 2 on a harness error.
 
-# Run from the project root regardless of where this was invoked.
 cd [file join [file dirname [info script]] ..]
 
 set SHELL_BIN "./target/debug/codecrafters-shell"
 set timeout 5
-log_user 0          ;# suppress the shell's own output; show only PASS/FAIL
+log_user 0
 
 set passed 0
 set failed 0
@@ -27,17 +37,21 @@ proc pass {name} {
     global passed
     incr passed
     puts "  ok   - $name"
+    flush stdout
 }
 
 proc fail {name why} {
     global failed
     incr failed
     puts "  FAIL - $name  ($why)"
+    flush stdout
 }
 
 # Spawn a fresh shell and sync on the first prompt.
+# `spawn_id` must be global — otherwise `spawn` sets a proc-local copy that
+# vanishes on return, leaving send/expect/close bound to the wrong terminal.
 proc boot {} {
-    global SHELL_BIN
+    global SHELL_BIN spawn_id
     spawn $SHELL_BIN
     expect {
         -ex {$ } {}
@@ -46,26 +60,23 @@ proc boot {} {
     }
 }
 
-# Tear down the current spawn (tolerate it having already exited).
+# Per-test teardown. `close` releases the pty master fd held by this expect
+# process (this is what prevents pty-pool exhaustion) and sends the shell EOF
+# so it exits; `wait` reaps it. No `kill` — killing first lets expect reset
+# spawn_id before close runs, so close would hit the wrong channel.
 proc shutdown {} {
+    global spawn_id
     catch { close }
     catch { wait }
 }
 
-# --- preconditions ----------------------------------------------------------
-
-puts "building shell ..."
-if {[catch {exec -ignorestderr cargo build} err]} {
-    puts "FATAL: cargo build failed:\n$err"
-    exit 2
-}
 if {![file exists $SHELL_BIN]} {
-    puts "FATAL: $SHELL_BIN not found after build"
+    puts "FATAL: $SHELL_BIN not found — run `cargo build` first"
     exit 2
 }
 
-# The spawned shell inherits this directory as its cwd, so `pwd` output
-# equals [pwd] — used as a marker that a command actually executed.
+# The shell inherits this directory as its cwd, so `pwd` output equals [pwd];
+# used as a marker that a command actually executed.
 set cwd [pwd]
 
 puts "running line-editor regression suite\n"
@@ -131,16 +142,15 @@ expect {
 }
 shutdown
 
-# --- ambiguous / no-match: the buffer must be left untouched ----------------
-# Verified indirectly: complete-then-run, and assert the command that runs is
-# exactly what was typed. If Tab had wrongly mutated the buffer, a different
-# command (or none) would run.
+# --- ambiguous / no-match: the buffer is left untouched ---------------------
+# Complete-then-run: the command that runs must be exactly what was typed.
+# If Tab had mutated the buffer, a different command (or none) would run.
 
 boot
 send "e\t\r"
 expect {
     -ex "e: command not found" { pass "completion: ambiguous 'e' + Tab leaves buffer = 'e'" }
-    timeout { fail "completion: ambiguous 'e' + Tab" "buffer was altered or no error seen" }
+    timeout { fail "completion: ambiguous 'e' + Tab" "buffer altered or no error seen" }
 }
 shutdown
 
@@ -148,18 +158,15 @@ boot
 send "xyz\t\r"
 expect {
     -ex "xyz: command not found" { pass "completion: no-match 'xyz' + Tab leaves buffer = 'xyz'" }
-    timeout { fail "completion: no-match 'xyz' + Tab" "buffer was altered or no error seen" }
+    timeout { fail "completion: no-match 'xyz' + Tab" "buffer altered or no error seen" }
 }
 shutdown
 
 # --- Backspace edits the buffer ---------------------------------------------
-# Type 'pwdX', Backspace once -> 'pwd', Enter. pwd runs only if the X was
-# actually removed; otherwise 'pwdX: command not found'.
+# 'pwdX' + Backspace -> 'pwd'; pwd runs only if the X was actually removed.
 
 boot
-send "pwdX"
-send "\x7f"
-send "\r"
+send "pwdX\x7f\r"
 expect {
     -ex $cwd { pass "backspace: 'pwdX' + BS + Enter corrects buffer to 'pwd'" }
     timeout  { fail "backspace: 'pwdX' + BS + Enter" "buffer not corrected to 'pwd'" }
@@ -177,12 +184,11 @@ expect {
 shutdown
 
 # --- an arrow-key escape sequence is swallowed, not injected ----------------
-# Send Up-arrow (ESC [ A), then 'pwd'. If the sequence leaked, the buffer
-# would be '[Apwd' and pwd would not run.
+# Up-arrow (ESC [ A) then 'pwd': if the sequence leaked, the buffer would be
+# '[Apwd' and pwd would not run.
 
 boot
-send "\x1b\[A"
-send "pwd\r"
+send "\x1b\[Apwd\r"
 expect {
     -ex $cwd { pass "escape: Up-arrow swallowed, 'pwd' still runs clean" }
     timeout  { fail "escape: Up-arrow swallowed" "arrow likely corrupted the buffer" }
@@ -190,18 +196,24 @@ expect {
 shutdown
 
 # --- an unterminated quote triggers the continuation prompt -----------------
+# Kept flat (not a nested expect): expect blocks nested inside another
+# expect's action body don't match reliably here.
 
 boot
 send "echo 'hi\r"
+set saw_prompt 0
 expect {
-    -ex "> " {
-        send "there'\r"
-        expect {
-            -ex "hi\r\nthere" { pass "continuation: multi-line quote joins with a newline" }
-            timeout { fail "continuation: multi-line quote" "joined output not seen" }
-        }
+    -ex "> " { set saw_prompt 1 }
+    timeout  {}
+}
+if {$saw_prompt} {
+    send "there'\r"
+    expect {
+        -ex "hi\r\nthere" { pass "continuation: multi-line quote joins with a newline" }
+        timeout { fail "continuation: multi-line quote" "joined output not seen" }
     }
-    timeout { fail "continuation: unterminated quote -> '> ' prompt" "no continuation prompt" }
+} else {
+    fail "continuation: multi-line quote" "no '> ' continuation prompt appeared"
 }
 shutdown
 

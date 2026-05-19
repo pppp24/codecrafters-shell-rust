@@ -52,9 +52,6 @@ fn complete_builtin(prefix: &str, builtins: &[&str]) -> Option<String> {
 }
 
 pub fn read_line(prompt: &str, builtins: &[&str]) -> Option<String> {
-    print!("{}", prompt);
-    io::stdout().flush().unwrap();
-
     let mut stdin = io::stdin().lock();
     let mut stdout = io::stdout().lock();
 
@@ -63,6 +60,9 @@ pub fn read_line(prompt: &str, builtins: &[&str]) -> Option<String> {
     let rc = unsafe { libc::isatty(libc::STDIN_FILENO) };
 
     if rc == 0 {
+        print!("{}", prompt);
+        stdout.flush().unwrap();
+
         let mut line = String::new();
         let bytes = stdin.read_line(&mut line).unwrap();
         if bytes == 0 {
@@ -79,6 +79,9 @@ pub fn read_line(prompt: &str, builtins: &[&str]) -> Option<String> {
             return None;
         }
     };
+
+    let _ = stdout.write_all(prompt.as_bytes());
+    let _ = stdout.flush();
 
     let mut bytes = stdin.bytes();
 
@@ -100,6 +103,9 @@ pub fn read_line(prompt: &str, builtins: &[&str]) -> Option<String> {
                             let _ = stdout.flush();
                             buffer.extend_from_slice(suffix_bytes);
                             buffer.push(b' ');
+                        } else {
+                            let _ = stdout.write_all(b"\x07");
+                            let _ = stdout.flush();
                         }
                     }
                 }
