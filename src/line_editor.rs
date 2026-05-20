@@ -75,7 +75,12 @@ pub fn read_line(prompt: &str, builtins: &[&str]) -> Option<String> {
 
     let mut bytes = stdin.bytes();
 
+    let mut last_was_tab = false;
+
     while let Some(byte) = bytes.next() {
+        let prev_was_tab = last_was_tab;
+        last_was_tab = false;
+
         match byte {
             Ok(byte) => match byte {
                 0x20..=0x7e => {
@@ -101,7 +106,20 @@ pub fn read_line(prompt: &str, builtins: &[&str]) -> Option<String> {
                                 buffer.extend_from_slice(suffix_bytes);
                                 buffer.push(b' ');
                             }
-                            _ => {}
+                            _ => {
+                                if prev_was_tab {
+                                    let _ = stdout.write_all(b"\n");
+                                    let _ = stdout.write_all(matches.join("  ").as_bytes());
+                                    let _ = stdout.write_all(b"\n");
+                                    let _ = stdout.write_all(prompt.as_bytes());
+                                    let _ = stdout.write_all(&buffer);
+                                    let _ = stdout.flush();
+                                } else {
+                                    let _ = stdout.write_all(b"\x07");
+                                    let _ = stdout.flush();
+                                    last_was_tab = true;
+                                }
+                            }
                         }
                     }
                 }

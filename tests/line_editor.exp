@@ -171,6 +171,50 @@ expect {
 }
 shutdown
 
+# --- multi-match: two-Tab listing (layer 7) ---------------------------------
+# Prefix 'e' matches the builtins 'echo' and 'exit'. First Tab should ring
+# the bell; the immediately-following second Tab should list both candidates
+# alphabetically with a two-space separator, then redraw `$ e` so the user
+# can keep typing. Three assertions on one fixture.
+
+boot
+send "e\t"
+expect {
+    -ex "\x07" { pass "multi-match: first Tab rings the bell" }
+    timeout    { fail "multi-match: first Tab rings the bell" "no bell character seen" }
+}
+send "\t"
+expect {
+    -ex "echo  exit" { pass "multi-match: second Tab lists candidates two-space-separated" }
+    timeout          { fail "multi-match: second Tab lists candidates" "candidate listing not seen" }
+}
+expect {
+    -ex {$ e} { pass "multi-match: prompt + buffer redrawn after listing" }
+    timeout   { fail "multi-match: prompt + buffer redrawn after listing" "redraw not seen" }
+}
+shutdown
+
+# A keystroke between Tabs must reset the Tab-count so the next Tab is treated
+# as a fresh first Tab — not a listing. After 'e<Tab>q<Tab>', the buffer is
+# 'eq' (no match → bell), and crucially must NOT trigger the {echo,exit}
+# listing left over from the first Tab.
+
+boot
+send "e\tq\t"
+set saw_listing 0
+set timeout 1
+expect {
+    -ex "echo  exit" { set saw_listing 1 }
+    timeout {}
+}
+set timeout 5
+if {$saw_listing} {
+    fail "multi-match: keystroke between Tabs resets state" "stale Tab-count produced a stray listing"
+} else {
+    pass "multi-match: keystroke between Tabs resets state (no stray listing)"
+}
+shutdown
+
 # --- Backspace edits the buffer ---------------------------------------------
 # 'pwdX' + Backspace -> 'pwd'; pwd runs only if the X was actually removed.
 
