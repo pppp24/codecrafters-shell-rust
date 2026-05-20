@@ -1,12 +1,11 @@
 use std::collections::HashMap;
-use std::fs::{File, Metadata, OpenOptions};
+use std::env;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
 use std::process::Command;
-use std::{env, fs};
 
 use crate::ast::{RedirOp, Redirection, SimpleCommand};
+use crate::path::find_command;
 
 pub struct Evaluator {
     builtins: HashMap<&'static str, BuiltinFn>,
@@ -60,7 +59,7 @@ impl Evaluator {
             return;
         }
 
-        match get_command_path(name) {
+        match find_command(name, env::var_os("PATH").as_deref()) {
             Some(_) => {
                 let mut command = Command::new(name);
                 command.args(&args);
@@ -98,7 +97,7 @@ impl Evaluator {
         let Some(name) = args.first() else { return };
         if self.builtins.contains_key(name) {
             let _ = writeln!(stdio.out, "{} is a shell builtin", name);
-        } else if let Some(path) = get_command_path(name) {
+        } else if let Some(path) = find_command(name, env::var_os("PATH").as_deref()) {
             let _ = writeln!(stdio.out, "{} is {}", name, path.display());
         } else {
             let _ = writeln!(stdio.err, "{}: not found", name);
@@ -141,27 +140,6 @@ impl Evaluator {
     pub fn builtin_names(&self) -> Vec<&'static str> {
         self.builtins.keys().copied().collect()
     }
-}
-
-fn is_executable(metadata: &Metadata) -> bool {
-    let permissions = metadata.permissions();
-    // 0o111 mask checks the executable bit for owner 0o100, group 0o010, and others 0o001
-    permissions.mode() & 0o111 != 0
-}
-
-fn get_command_path(name: &str) -> Option<PathBuf> {
-    if let Some(paths) = env::var_os("PATH") {
-        for mut dir in env::split_paths(&paths) {
-            dir.push(name);
-            if let Ok(metadata) = fs::metadata(&dir) {
-                let is_executable = metadata.is_file() && is_executable(&metadata);
-                if is_executable {
-                    return Some(dir);
-                }
-            }
-        }
-    }
-    return None;
 }
 
 fn open_redir_target(redirs: &[Redirection], fd: u32) -> Option<File> {

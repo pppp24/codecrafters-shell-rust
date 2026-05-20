@@ -1,7 +1,10 @@
 use std::{
+    env,
     io::{self, BufRead, Read, Write},
     mem::MaybeUninit,
 };
+
+use crate::path::complete_command;
 
 pub struct RawMode {
     original: libc::termios,
@@ -36,19 +39,6 @@ impl Drop for RawMode {
     fn drop(&mut self) {
         let _ = unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &mut self.original) };
     }
-}
-
-fn complete_builtin(prefix: &str, builtins: &[&str]) -> Option<String> {
-    let matches: Vec<&&str> = builtins
-        .iter()
-        .filter(|builtin| builtin.starts_with(prefix))
-        .collect();
-
-    if matches.len() != 1 {
-        return None;
-    }
-
-    return Some(matches[0].to_string());
 }
 
 pub fn read_line(prompt: &str, builtins: &[&str]) -> Option<String> {
@@ -96,16 +86,22 @@ pub fn read_line(prompt: &str, builtins: &[&str]) -> Option<String> {
 
                 b'\t' => {
                     if let Ok(prefix) = str::from_utf8(&buffer[..]) {
-                        if let Some(builtin) = complete_builtin(prefix, builtins) {
-                            let suffix_bytes = builtin[prefix.len()..].as_bytes();
-                            let _ = stdout.write_all(suffix_bytes);
-                            let _ = stdout.write_all(b" ");
-                            let _ = stdout.flush();
-                            buffer.extend_from_slice(suffix_bytes);
-                            buffer.push(b' ');
-                        } else {
-                            let _ = stdout.write_all(b"\x07");
-                            let _ = stdout.flush();
+                        let matches =
+                            complete_command(prefix, builtins, env::var_os("PATH").as_deref());
+                        match matches.len() {
+                            0 => {
+                                let _ = stdout.write_all(b"\x07");
+                                let _ = stdout.flush();
+                            }
+                            1 => {
+                                let suffix_bytes = matches[0][prefix.len()..].as_bytes();
+                                let _ = stdout.write_all(suffix_bytes);
+                                let _ = stdout.write_all(b" ");
+                                let _ = stdout.flush();
+                                buffer.extend_from_slice(suffix_bytes);
+                                buffer.push(b' ');
+                            }
+                            _ => {}
                         }
                     }
                 }
