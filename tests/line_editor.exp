@@ -79,6 +79,15 @@ if {![file exists $SHELL_BIN]} {
 # used as a marker that a command actually executed.
 set cwd [pwd]
 
+# Force an empty PATH for the default case so completion only considers
+# builtins. Without this, prefixes like 'ex' / 'pw' / 'c' collide with the
+# host's /bin and /usr/bin (export, pwgen, cat, ...) and become multi-match.
+# The PATH-completion test below sets PATH locally for its own scope.
+# `orig_path` keeps the host PATH around so Tcl's own `exec mktemp` etc. work
+# when we need them.
+set orig_path $::env(PATH)
+set ::env(PATH) ""
+
 puts "running line-editor regression suite\n"
 
 # --- completion: a unique prefix completes ----------------------------------
@@ -216,6 +225,32 @@ if {$saw_prompt} {
     fail "continuation: multi-line quote" "no '> ' continuation prompt appeared"
 }
 shutdown
+
+# --- PATH executable completion ---------------------------------------------
+# Mirrors the codecrafters scenario: create a custom executable in a tempdir,
+# put that dir on PATH, then verify `custom<TAB>` completes to the executable.
+# PATH is restored to "" afterward so the remaining tests stay hermetic.
+
+# Restore the host PATH briefly so mktemp/touch/chmod are findable…
+set ::env(PATH) $orig_path
+set tmp [exec mktemp -d]
+exec touch "$tmp/custom_executable"
+exec chmod +x "$tmp/custom_executable"
+# …then point PATH at our tempdir for the actual shell test.
+set ::env(PATH) $tmp
+
+boot
+send "custom\t"
+expect {
+    -ex "custom_executable " { pass "completion: PATH executable 'custom' + Tab -> 'custom_executable '" }
+    timeout { fail "completion: PATH executable" "custom_executable not completed" }
+}
+shutdown
+
+# Restore host PATH for cleanup, then go back to empty for remaining tests.
+set ::env(PATH) $orig_path
+exec rm -rf $tmp
+set ::env(PATH) ""
 
 # --- Ctrl-D on an empty line exits the shell --------------------------------
 

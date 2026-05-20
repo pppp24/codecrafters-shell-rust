@@ -16,7 +16,7 @@ fn is_executable(metadata: &Metadata) -> bool {
 pub fn find_command(name: &str, paths: Option<&OsStr>) -> Option<PathBuf> {
     let paths = paths?;
 
-    for mut dir in env::split_paths(&paths) {
+    for mut dir in env::split_paths(paths) {
         dir.push(name);
         if let Ok(metadata) = fs::metadata(&dir) {
             let is_executable = metadata.is_file() && is_executable(&metadata);
@@ -69,4 +69,265 @@ pub fn complete_command(prefix: &str, builtins: &[&str], paths: Option<&OsStr>) 
     out.sort();
 
     return out;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // --- helpers ------------------------------------------------------------
+
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    /// Minimal RAII temp directory — created on `new`, removed on drop.
+    /// Avoids a `tempfile` dev-dependency.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            let mut p = std::env::temp_dir();
+            // pid+counter for uniqueness across parallel tests in this process
+            let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+            p.push(format!("shell-path-test-{}-{}", std::process::id(), id));
+            fs::create_dir_all(&p).unwrap();
+            TempDir(p)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+
+        fn as_os_str(&self) -> &OsStr {
+            self.0.as_os_str()
+        }
+
+        /// Create an empty regular file with mode 0o755 (owner exec set).
+        fn touch_exec(&self, name: &str) {
+            let p = self.0.join(name);
+            fs::write(&p, b"").unwrap();
+            fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        /// Create an empty regular file with mode 0o644 (no exec bits).
+        fn touch_plain(&self, name: &str) {
+            let p = self.0.join(name);
+            fs::write(&p, b"").unwrap();
+            fs::set_permissions(&p, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        /// Create a subdirectory of any name (regardless of mode).
+        fn mkdir(&self, name: &str) {
+            fs::create_dir(self.0.join(name)).unwrap();
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn join<I, S>(dirs: I) -> OsString
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        env::join_paths(dirs).unwrap()
+    }
+
+    const BUILTINS: &[&str] = &["echo", "exit", "type", "pwd", "cd"];
+
+    // --- find_command -------------------------------------------------------
+
+    #[test]
+    fn find_command_returns_none_when_path_is_none() {
+        assert_eq!(find_command("ls", None), None);
+    }
+
+    #[test]
+    fn find_command_returns_none_when_path_is_empty() {
+        let empty = OsString::new();
+        assert_eq!(find_command("ls", Some(&empty)), None);
+    }
+
+    #[test]
+    fn find_command_finds_executable_in_dir() {
+        let dir = TempDir::new();
+        dir.touch_exec("foo");
+        assert_eq!(
+            find_command("foo", Some(dir.as_os_str())).as_deref(),
+            Some(dir.path().join("foo").as_path()),
+        );
+    }
+
+    #[test]
+    fn find_command_returns_none_for_non_executable_file() {
+        let dir = TempDir::new();
+        dir.touch_plain("foo");
+        assert_eq!(find_command("foo", Some(dir.as_os_str())), None);
+    }
+
+    #[test]
+    fn find_command_returns_none_for_subdirectory() {
+        // A directory named "foo" in PATH must not match — only regular files.
+        let dir = TempDir::new();
+        dir.mkdir("foo");
+        assert_eq!(find_command("foo", Some(dir.as_os_str())), None);
+    }
+
+    #[test]
+    fn find_command_returns_first_match_in_path_order() {
+        // PATH ordering: the leftmost dir with a match wins.
+        let dir1 = TempDir::new();
+        let dir2 = TempDir::new();
+        dir1.touch_exec("foo");
+        dir2.touch_exec("foo");
+        let path = join([dir1.path(), dir2.path()]);
+        let found = find_command("foo", Some(&path)).unwrap();
+        assert_eq!(found, dir1.path().join("foo"));
+    }
+
+    #[test]
+    fn find_command_skips_missing_path_dirs() {
+        // A non-existent dir in PATH is silently skipped, not fatal.
+        let dir = TempDir::new();
+        dir.touch_exec("foo");
+        let missing = Path::new("/nonexistent_xyz_dir_for_test");
+        let path = join([missing, dir.path()]);
+        let found = find_command("foo", Some(&path)).unwrap();
+        assert_eq!(found, dir.path().join("foo"));
+    }
+
+    // --- complete_command: builtin-only -------------------------------------
+
+    #[test]
+    fn complete_command_builtin_unique_match() {
+        assert_eq!(complete_command("ech", BUILTINS, None), vec!["echo"]);
+    }
+
+    #[test]
+    fn complete_command_builtin_multi_match_sorted() {
+        // 'e' matches both 'echo' and 'exit'; result must be sorted.
+        assert_eq!(complete_command("e", BUILTINS, None), vec!["echo", "exit"]);
+    }
+
+    #[test]
+    fn complete_command_no_match() {
+        assert_eq!(
+            complete_command("xyz", BUILTINS, None),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn complete_command_empty_prefix_matches_all_builtins() {
+        let result = complete_command("", &["echo", "exit"], None);
+        assert_eq!(result, vec!["echo", "exit"]);
+    }
+
+    // --- complete_command: PATH -------------------------------------------
+
+    #[test]
+    fn complete_command_finds_path_executable() {
+        // Mirrors the codecrafters tester: `custom<TAB>` -> `custom_executable`.
+        let dir = TempDir::new();
+        dir.touch_exec("custom_executable");
+        assert_eq!(
+            complete_command("custom", &[], Some(dir.as_os_str())),
+            vec!["custom_executable"]
+        );
+    }
+
+    #[test]
+    fn complete_command_combines_builtin_and_path() {
+        let dir = TempDir::new();
+        dir.touch_exec("echo_external");
+        assert_eq!(
+            complete_command("ech", BUILTINS, Some(dir.as_os_str())),
+            vec!["echo", "echo_external"]
+        );
+    }
+
+    #[test]
+    fn complete_command_dedupes_builtin_and_path_with_same_name() {
+        // A PATH executable named 'echo' must not double up the builtin.
+        let dir = TempDir::new();
+        dir.touch_exec("echo");
+        assert_eq!(
+            complete_command("ech", BUILTINS, Some(dir.as_os_str())),
+            vec!["echo"]
+        );
+    }
+
+    #[test]
+    fn complete_command_excludes_non_executable_file() {
+        let dir = TempDir::new();
+        dir.touch_plain("custom_textfile");
+        assert!(
+            complete_command("custom", &[], Some(dir.as_os_str())).is_empty(),
+            "non-executable file must not be a completion candidate"
+        );
+    }
+
+    #[test]
+    fn complete_command_excludes_subdirectory() {
+        let dir = TempDir::new();
+        dir.mkdir("custom_dir");
+        assert!(
+            complete_command("custom", &[], Some(dir.as_os_str())).is_empty(),
+            "directory must not be a completion candidate"
+        );
+    }
+
+    #[test]
+    fn complete_command_dedupes_same_name_across_dirs() {
+        let dir1 = TempDir::new();
+        let dir2 = TempDir::new();
+        dir1.touch_exec("same_name");
+        dir2.touch_exec("same_name");
+        let path = join([dir1.path(), dir2.path()]);
+        assert_eq!(
+            complete_command("same", &[], Some(&path)),
+            vec!["same_name"]
+        );
+    }
+
+    #[test]
+    fn complete_command_path_multi_match_sorted() {
+        let dir = TempDir::new();
+        dir.touch_exec("xy_foo");
+        dir.touch_exec("xy_bar");
+        assert_eq!(
+            complete_command("xy", &[], Some(dir.as_os_str())),
+            vec!["xy_bar", "xy_foo"]
+        );
+    }
+
+    #[test]
+    fn complete_command_path_dir_with_no_matches_is_harmless() {
+        // The PATH dir contains executables, but none match the prefix.
+        // Builtins should still be considered.
+        let dir = TempDir::new();
+        dir.touch_exec("something_else_entirely");
+        assert_eq!(
+            complete_command("ech", BUILTINS, Some(dir.as_os_str())),
+            vec!["echo"]
+        );
+    }
+
+    #[test]
+    fn complete_command_skips_missing_path_dirs() {
+        // A non-existent dir in PATH is silently skipped.
+        let dir = TempDir::new();
+        dir.touch_exec("custom_executable");
+        let missing = Path::new("/nonexistent_xyz_dir_for_test");
+        let path = join([missing, dir.path()]);
+        assert_eq!(
+            complete_command("custom", &[], Some(&path)),
+            vec!["custom_executable"]
+        );
+    }
 }
