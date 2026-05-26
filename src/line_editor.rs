@@ -139,8 +139,17 @@ pub fn read_line(prompt: &str, builtins: &[&str]) -> Option<String> {
                                     let _ = stdout.flush();
                                     buffer.extend_from_slice(suffix_bytes);
                                 } else if prev_was_tab {
+                                    let display: Vec<String> = matches
+                                        .iter()
+                                        .map(
+                                            |(n, is_dir)| {
+                                                if *is_dir { format!("{n}/") } else { n.clone() }
+                                            },
+                                        )
+                                        .collect();
+
                                     let _ = stdout.write_all(b"\n");
-                                    let _ = stdout.write_all(names.join("  ").as_bytes());
+                                    let _ = stdout.write_all(display.join("  ").as_bytes());
                                     let _ = stdout.write_all(b"\n");
                                     let _ = stdout.write_all(prompt.as_bytes());
                                     let _ = stdout.write_all(&buffer);

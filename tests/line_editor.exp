@@ -400,6 +400,49 @@ set ::env(PATH) $orig_path
 exec rm -rf $tmp
 set ::env(PATH) ""
 
+# --- multi-match listing with dir markers (layer 12) ------------------------
+# Multi-match Tab on a filename argument follows the bell-then-list flow
+# from layer 7, with one addition: directory entries are rendered with a
+# trailing '/'. Codecrafters scenario: cwd has 'bar.txt' (file) and 'foo/'
+# (dir); 'stat ' + Tab Tab rings the bell, then lists 'bar.txt  foo/'
+# (sorted, two-space-separated, dir marked), with the prompt and original
+# input redrawn afterward.
+
+set ::env(PATH) $orig_path
+set tmp [exec mktemp -d]
+exec touch "$tmp/bar.txt"
+exec mkdir "$tmp/foo"
+set ::env(PATH) ""
+
+set saved_cwd [pwd]
+cd $tmp
+
+boot
+send "stat \t"
+expect {
+    -ex "\x07" { pass "multi-match filenames: first Tab rings the bell" }
+    timeout    { fail "multi-match filenames: first Tab rings the bell" "no bell seen" }
+}
+send "\t"
+expect {
+    -ex "bar.txt  foo/" {
+        pass "multi-match filenames: second Tab lists 'bar.txt  foo/' (sorted, two-space, dir marker)"
+    }
+    timeout {
+        fail "multi-match filenames: second Tab listing" "expected 'bar.txt  foo/' not seen"
+    }
+}
+expect {
+    -ex {$ stat } { pass "multi-match filenames: prompt + original input redrawn after listing" }
+    timeout       { fail "multi-match filenames: redraw" "prompt + 'stat ' not seen after listing" }
+}
+shutdown
+
+cd $saved_cwd
+set ::env(PATH) $orig_path
+exec rm -rf $tmp
+set ::env(PATH) ""
+
 # --- Backspace edits the buffer ---------------------------------------------
 # 'pwdX' + Backspace -> 'pwd'; pwd runs only if the X was actually removed.
 
