@@ -7,6 +7,21 @@ use std::{
     path::PathBuf,
 };
 
+pub fn longest_common_prefix(matches: &[String]) -> usize {
+    let Some(first) = matches.first() else {
+        return 0;
+    };
+
+    matches.iter().skip(1).fold(first.len(), |acc, s| {
+        first
+            .bytes()
+            .zip(s.bytes())
+            .take(acc)
+            .take_while(|(a, b)| a == b)
+            .count()
+    })
+}
+
 fn is_executable(metadata: &Metadata) -> bool {
     let permissions = metadata.permissions();
     // 0o111 mask checks the executable bit for owner 0o100, group 0o010, and others 0o001
@@ -329,5 +344,76 @@ mod tests {
             complete_command("custom", &[], Some(&path)),
             vec!["custom_executable"]
         );
+    }
+
+    // --- longest_common_prefix ----------------------------------------------
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn lcp_empty_slice_returns_zero() {
+        assert_eq!(longest_common_prefix(&[]), 0);
+    }
+
+    #[test]
+    fn lcp_single_string_returns_its_length() {
+        assert_eq!(longest_common_prefix(&s(&["echo"])), 4);
+    }
+
+    #[test]
+    fn lcp_single_empty_string_returns_zero() {
+        assert_eq!(longest_common_prefix(&s(&[""])), 0);
+    }
+
+    #[test]
+    fn lcp_all_identical() {
+        assert_eq!(longest_common_prefix(&s(&["echo", "echo", "echo"])), 4);
+    }
+
+    #[test]
+    fn lcp_no_common_prefix() {
+        assert_eq!(longest_common_prefix(&s(&["abc", "xyz"])), 0);
+    }
+
+    #[test]
+    fn lcp_partial_common_prefix() {
+        // 'echo' and 'exit' share only the first byte.
+        assert_eq!(longest_common_prefix(&s(&["echo", "exit"])), 1);
+    }
+
+    #[test]
+    fn lcp_one_string_is_prefix_of_others() {
+        // 'xyz_foo' is a prefix of the other two; LCP is the length of the shortest.
+        assert_eq!(
+            longest_common_prefix(&s(&["xyz_foo", "xyz_foo_bar", "xyz_foo_bar_baz"])),
+            7,
+        );
+    }
+
+    #[test]
+    fn lcp_codecrafters_scenario_step_two() {
+        // After step 1 of the codecrafters LCP test, the candidate set shrinks
+        // to these two; LCP becomes 'xyz_foo_bar' (length 11).
+        assert_eq!(
+            longest_common_prefix(&s(&["xyz_foo_bar", "xyz_foo_bar_baz"])),
+            11,
+        );
+    }
+
+    #[test]
+    fn lcp_one_empty_string_collapses_to_zero() {
+        // An empty string contributes no characters; LCP is 0.
+        assert_eq!(longest_common_prefix(&s(&["echo", "", "exit"])), 0);
+    }
+
+    #[test]
+    fn lcp_byte_count_matches_slicing() {
+        // The returned usize must be a valid byte index into matches[0]
+        // (this is how the editor uses it: &matches[0][prefix.len()..lcp]).
+        let m = s(&["xyz_foo", "xyz_foo_bar"]);
+        let lcp = longest_common_prefix(&m);
+        assert_eq!(&m[0][..lcp], "xyz_foo");
     }
 }

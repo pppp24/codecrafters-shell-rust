@@ -215,6 +215,77 @@ if {$saw_listing} {
 }
 shutdown
 
+# --- LCP partial completion (layer 8) ---------------------------------------
+# Mirrors the codecrafters LCP contract: PATH contains three executables
+# where each is a prefix of the next. Progressive Tab completion:
+#   xyz_<TAB>           -> xyz_foo            (LCP of all three; no space)
+#   xyz_foo_<TAB>       -> xyz_foo_bar        (LCP of remaining two; no space)
+#   xyz_foo_bar_<TAB>   -> xyz_foo_bar_baz    (single match; WITH space)
+# The user types '_' between Tabs (per the codecrafters spec).
+
+set ::env(PATH) $orig_path
+set tmp [exec mktemp -d]
+exec touch "$tmp/xyz_foo" "$tmp/xyz_foo_bar" "$tmp/xyz_foo_bar_baz"
+exec chmod +x "$tmp/xyz_foo" "$tmp/xyz_foo_bar" "$tmp/xyz_foo_bar_baz"
+set ::env(PATH) $tmp
+
+boot
+send "xyz_\t"
+# Step 1: user types 'xyz_' (echoed) then Tab; shell appends LCP suffix 'foo'.
+# Stream so far: 'xyz_' + 'foo' = 'xyz_foo'.
+expect {
+    -ex "xyz_foo" { pass "LCP step 1: 'xyz_' + Tab -> 'xyz_foo' (no trailing space)" }
+    timeout       { fail "LCP step 1" "did not extend to xyz_foo" }
+}
+send "_\t"
+# Step 2: '_' is echoed, then Tab extends the LCP further by 'bar'.
+# expect matches against the UNCONSUMED stream, so the new bytes are '_bar',
+# not the cumulative 'xyz_foo_bar'.
+expect {
+    -ex "_bar" { pass "LCP step 2: '_' + Tab -> '_bar' (no trailing space)" }
+    timeout    { fail "LCP step 2" "did not extend by '_bar'" }
+}
+send "_\t"
+# Step 3: '_' echoed, single match -> completion adds 'baz' + trailing space.
+# New bytes: '_baz '. The trailing space is the contract this layer must meet.
+expect {
+    -ex "_baz " { pass "LCP step 3: '_' + Tab -> '_baz ' (single match, trailing space)" }
+    timeout    { fail "LCP step 3" "did not complete with trailing space" }
+}
+shutdown
+
+# Edge case: after an LCP extension leaves the prefix at the stuck length
+# (LCP == prefix), pressing Tab again must follow the layer 7 path —
+# bell on the next Tab, list on the one after — not silently extend.
+# Buffer: 'xyz_foo' (after step 1). Press Tab: LCP=='xyz_foo' (stuck),
+# so the bell-then-list dance kicks in.
+
+boot
+send "xyz_\t"
+expect {
+    -ex "xyz_foo" {}
+    timeout       { fail "LCP edge setup" "step 1 didn't extend"; shutdown; continue }
+}
+send "\t"
+expect {
+    -ex "\x07" { pass "LCP stuck: Tab on extended prefix rings bell (matches bash default)" }
+    timeout    { fail "LCP stuck: bell on Tab after extension" "no bell character seen" }
+}
+send "\t"
+expect {
+    -ex "xyz_foo  xyz_foo_bar  xyz_foo_bar_baz" {
+        pass "LCP stuck: second Tab after extension lists all candidates"
+    }
+    timeout {
+        fail "LCP stuck: listing after second Tab" "candidate listing not seen"
+    }
+}
+shutdown
+
+set ::env(PATH) $orig_path
+exec rm -rf $tmp
+set ::env(PATH) ""
+
 # --- Backspace edits the buffer ---------------------------------------------
 # 'pwdX' + Backspace -> 'pwd'; pwd runs only if the X was actually removed.
 

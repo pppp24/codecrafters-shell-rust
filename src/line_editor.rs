@@ -4,7 +4,7 @@ use std::{
     mem::MaybeUninit,
 };
 
-use crate::path::complete_command;
+use crate::path::{complete_command, longest_common_prefix};
 
 pub struct RawMode {
     original: libc::termios,
@@ -107,7 +107,14 @@ pub fn read_line(prompt: &str, builtins: &[&str]) -> Option<String> {
                                 buffer.push(b' ');
                             }
                             _ => {
-                                if prev_was_tab {
+                                let lcp = longest_common_prefix(&matches);
+                                if lcp > prefix.len() {
+                                    let suffix = &matches[0][prefix.len()..lcp];
+                                    let suffix_bytes = suffix.as_bytes();
+                                    let _ = stdout.write_all(suffix_bytes);
+                                    let _ = stdout.flush();
+                                    buffer.extend_from_slice(suffix_bytes);
+                                } else if prev_was_tab {
                                     let _ = stdout.write_all(b"\n");
                                     let _ = stdout.write_all(matches.join("  ").as_bytes());
                                     let _ = stdout.write_all(b"\n");
