@@ -363,6 +363,43 @@ set ::env(PATH) $orig_path
 exec rm -rf $tmp
 set ::env(PATH) ""
 
+# --- directory completion: trailing '/' marker (layer 11) -------------------
+# A directory match completes with a '/' suffix and NO trailing space, so the
+# next Tab is treated as path completion (segment contains '/' → layer-10
+# dispatch descends). The codecrafters scenario:
+#   $ ls <TAB>          ->  $ ls pig/
+#   $ ls pig/<TAB>      ->  $ ls pig/dog/
+# Step 2 doubles as the "no trailing space" assertion: if a space had been
+# appended after 'pig/', the second Tab's rfind(' ') would find that space,
+# segment would be "", and we'd dispatch into cwd-filename completion (which
+# would find nothing matching) → bell instead of descent.
+
+set ::env(PATH) $orig_path
+set tmp [exec mktemp -d]
+exec mkdir -p "$tmp/pig/dog"
+set ::env(PATH) ""
+
+set saved_cwd [pwd]
+cd $tmp
+
+boot
+send "ls \t"
+expect {
+    -ex "pig/" { pass "dir-completion: 'ls ' + Tab -> 'ls pig/' (slash, no trailing space)" }
+    timeout    { fail "dir-completion: step 1" "directory completion not seen" }
+}
+send "\t"
+expect {
+    -ex "dog/" { pass "dir-completion: second Tab on 'ls pig/' descends into 'pig/dog/'" }
+    timeout    { fail "dir-completion: step 2" "nested directory completion not seen (likely a stray trailing space after 'pig/')" }
+}
+shutdown
+
+cd $saved_cwd
+set ::env(PATH) $orig_path
+exec rm -rf $tmp
+set ::env(PATH) ""
+
 # --- Backspace edits the buffer ---------------------------------------------
 # 'pwdX' + Backspace -> 'pwd'; pwd runs only if the X was actually removed.
 

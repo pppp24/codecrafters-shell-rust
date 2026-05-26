@@ -7,12 +7,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub fn longest_common_prefix(matches: &[String]) -> usize {
+pub fn longest_common_prefix<S: AsRef<str>>(matches: &[S]) -> usize {
     let Some(first) = matches.first() else {
         return 0;
     };
 
+    let first = first.as_ref();
+
     matches.iter().skip(1).fold(first.len(), |acc, s| {
+        let s = s.as_ref();
+
         first
             .bytes()
             .zip(s.bytes())
@@ -86,8 +90,8 @@ pub fn complete_command(prefix: &str, builtins: &[&str], paths: Option<&OsStr>) 
     return out;
 }
 
-pub fn complete_filename(prefix: &str, cwd: &Path) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+pub fn complete_filename(prefix: &str, cwd: &Path) -> Vec<(String, bool)> {
+    let mut out: Vec<(String, bool)> = Vec::new();
     let Ok(entries) = fs::read_dir(cwd) else {
         return out;
     };
@@ -98,7 +102,13 @@ pub fn complete_filename(prefix: &str, cwd: &Path) -> Vec<String> {
             continue;
         };
         if name_str.starts_with(prefix) {
-            out.push(name_str.to_string())
+            // fs::metadata(path) follows symlinks (unlike DirEntry::metadata()). For non-symlink entries this is equivalent; for symlinks it gets the target's metadata, which is what we want for the is_dir flag.
+            let is_dir = fs::metadata(entry.path())
+                .or_else(|_| entry.metadata()) // broken symlink → its own metadata
+                .map(|m| m.is_dir())
+                .unwrap_or(false);
+
+            out.push((name_str.to_string(), is_dir))
         }
     }
 
@@ -171,6 +181,12 @@ mod tests {
         S: AsRef<OsStr>,
     {
         env::join_paths(dirs).unwrap()
+    }
+
+    /// Constructs a `(name, is_dir)` tuple — the return-item shape of
+    /// `complete_filename` after layer 11. Keeps test assertions readable.
+    fn entry(name: &str, is_dir: bool) -> (String, bool) {
+        (name.to_string(), is_dir)
     }
 
     const BUILTINS: &[&str] = &["echo", "exit", "type", "pwd", "cd"];
@@ -374,7 +390,9 @@ mod tests {
 
     #[test]
     fn lcp_empty_slice_returns_zero() {
-        assert_eq!(longest_common_prefix(&[]), 0);
+        // Explicit type parameter — the empty slice gives the compiler nothing
+        // to infer `S` from now that `longest_common_prefix` is generic.
+        assert_eq!(longest_common_prefix::<&str>(&[]), 0);
     }
 
     #[test]
@@ -444,7 +462,7 @@ mod tests {
         let dir = TempDir::new();
         assert_eq!(
             complete_filename("re", dir.path()),
-            Vec::<String>::new()
+            Vec::<(String, bool)>::new()
         );
     }
 
@@ -455,7 +473,7 @@ mod tests {
         dir.touch_plain("readme.txt");
         assert_eq!(
             complete_filename("re", dir.path()),
-            vec!["readme.txt"]
+            vec![entry("readme.txt", false)]
         );
     }
 
@@ -466,7 +484,7 @@ mod tests {
         dir.touch_plain("hello.py");
         assert_eq!(
             complete_filename("re", dir.path()),
-            vec!["readme.txt"]
+            vec![entry("readme.txt", false)]
         );
     }
 
@@ -477,7 +495,7 @@ mod tests {
         dir.touch_plain("hello_world.py");
         assert_eq!(
             complete_filename("hello", dir.path()),
-            vec!["hello_world.py"]
+            vec![entry("hello_world.py", false)],
         );
     }
 
@@ -489,7 +507,11 @@ mod tests {
         dir.touch_plain("mu");
         assert_eq!(
             complete_filename("", dir.path()),
-            vec!["alpha", "mu", "zeta"]
+            vec![
+                entry("alpha", false),
+                entry("mu", false),
+                entry("zeta", false)
+            ],
         );
     }
 
@@ -500,19 +522,18 @@ mod tests {
         dir.touch_plain("readme.md");
         assert_eq!(
             complete_filename("re", dir.path()),
-            vec!["readme.md", "readme.txt"]
+            vec![entry("readme.md", false), entry("readme.txt", false)],
         );
     }
 
     #[test]
     fn complete_filename_includes_directories() {
-        // Directories are candidates too — directory completion's `/` marker
-        // is a deferred future stage; this layer treats all entries equally.
+        // Directories are candidates and reported with is_dir=true.
         let dir = TempDir::new();
         dir.mkdir("results");
         assert_eq!(
             complete_filename("re", dir.path()),
-            vec!["results"]
+            vec![entry("results", true)]
         );
     }
 
@@ -524,7 +545,7 @@ mod tests {
         dir.touch_plain("readme.txt"); // mode 0o644, no exec
         assert_eq!(
             complete_filename("re", dir.path()),
-            vec!["readme.txt"]
+            vec![entry("readme.txt", false)]
         );
     }
 
@@ -534,7 +555,7 @@ mod tests {
         dir.touch_plain("readme.txt");
         assert_eq!(
             complete_filename("xyz", dir.path()),
-            Vec::<String>::new()
+            Vec::<(String, bool)>::new()
         );
     }
 
@@ -542,10 +563,7 @@ mod tests {
     fn complete_filename_nonexistent_cwd_returns_empty() {
         // Bad cwd is silent — no panic, just empty Vec.
         let bogus = Path::new("/nonexistent_dir_for_completion_test");
-        assert_eq!(
-            complete_filename("re", bogus),
-            Vec::<String>::new()
-        );
+        assert_eq!(complete_filename("re", bogus), Vec::<(String, bool)>::new());
     }
 
     // --- complete_filename: nested-path scenarios (layer 10) ----------------
@@ -565,7 +583,10 @@ mod tests {
         fs::write(&file, b"").unwrap();
         fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
 
-        assert_eq!(complete_filename("f", &nested), vec!["file.txt"]);
+        assert_eq!(
+            complete_filename("f", &nested),
+            vec![entry("file.txt", false)]
+        );
     }
 
     #[test]
@@ -603,7 +624,51 @@ mod tests {
 
         assert_eq!(
             complete_filename("", &nested),
-            vec!["alpha.txt", "beta.txt", "gamma.txt"],
+            vec![
+                entry("alpha.txt", false),
+                entry("beta.txt", false),
+                entry("gamma.txt", false),
+            ],
+        );
+    }
+
+    // --- complete_filename: directory marker (layer 11) ---------------------
+    // After layer 11, each match carries an is_dir flag the editor uses to
+    // pick the trailing character ('/' for dirs, ' ' for files).
+
+    #[test]
+    fn complete_filename_marks_directory_entries() {
+        // Codecrafters layer-11 scenario: 'ls ' + Tab on a cwd whose only
+        // entry is a directory 'pig/' → reported with is_dir=true.
+        let dir = TempDir::new();
+        dir.mkdir("pig");
+        assert_eq!(complete_filename("p", dir.path()), vec![entry("pig", true)]);
+    }
+
+    #[test]
+    fn complete_filename_mixed_files_and_directories() {
+        // Both kinds in one cwd: the flag must be correct per entry.
+        // Result is sorted alphabetically by name.
+        let dir = TempDir::new();
+        dir.mkdir("results");
+        dir.touch_plain("readme.txt");
+        assert_eq!(
+            complete_filename("re", dir.path()),
+            vec![entry("readme.txt", false), entry("results", true)],
+        );
+    }
+
+    #[test]
+    fn complete_filename_symlink_to_dir_reports_true() {
+        // is_dir uses `entry.metadata()` which follows symlinks — a symlink
+        // pointing at a directory is itself reported as is_dir=true. Matches
+        // bash default behavior (decision #3 in layer_11.md).
+        let dir = TempDir::new();
+        dir.mkdir("real");
+        std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("link")).unwrap();
+        assert_eq!(
+            complete_filename("l", dir.path()),
+            vec![entry("link", true)]
         );
     }
 }

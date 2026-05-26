@@ -100,14 +100,17 @@ pub fn read_line(prompt: &str, builtins: &[&str]) -> Option<String> {
                             None => ("", segment),
                         };
 
-                        let matches = if !dir_part.is_empty() {
+                        let matches: Vec<(String, bool)> = if !dir_part.is_empty() {
                             let cwd = env::current_dir().unwrap_or_default();
                             complete_filename(prefix_part, &cwd.join(dir_part))
                         } else if segment_start == 0 {
-                            complete_command(segment, builtins, env::var_os("PATH").as_deref())
+                            complete_command(prefix_part, builtins, env::var_os("PATH").as_deref())
+                                .into_iter()
+                                .map(|m| (m, false))
+                                .collect()
                         } else {
                             let cwd = env::current_dir().unwrap_or_default();
-                            complete_filename(segment, &cwd)
+                            complete_filename(prefix_part, &cwd)
                         };
 
                         match matches.len() {
@@ -116,24 +119,28 @@ pub fn read_line(prompt: &str, builtins: &[&str]) -> Option<String> {
                                 let _ = stdout.flush();
                             }
                             1 => {
-                                let suffix_bytes = matches[0][prefix_part.len()..].as_bytes();
+                                let (m, is_dir) = &matches[0];
+                                let suffix_bytes = m[prefix_part.len()..].as_bytes();
                                 let _ = stdout.write_all(suffix_bytes);
-                                let _ = stdout.write_all(b" ");
+                                let trailer = if *is_dir { b"/" } else { b" " };
+                                let _ = stdout.write_all(trailer);
                                 let _ = stdout.flush();
                                 buffer.extend_from_slice(suffix_bytes);
-                                buffer.push(b' ');
+                                buffer.push(trailer[0]);
                             }
                             _ => {
-                                let lcp = longest_common_prefix(&matches);
+                                let names: Vec<&str> =
+                                    matches.iter().map(|(n, _)| n.as_str()).collect();
+                                let lcp = longest_common_prefix(&names);
                                 if lcp > prefix_part.len() {
-                                    let suffix = &matches[0][prefix_part.len()..lcp];
+                                    let suffix = &names[0][prefix_part.len()..lcp];
                                     let suffix_bytes = suffix.as_bytes();
                                     let _ = stdout.write_all(suffix_bytes);
                                     let _ = stdout.flush();
                                     buffer.extend_from_slice(suffix_bytes);
                                 } else if prev_was_tab {
                                     let _ = stdout.write_all(b"\n");
-                                    let _ = stdout.write_all(matches.join("  ").as_bytes());
+                                    let _ = stdout.write_all(names.join("  ").as_bytes());
                                     let _ = stdout.write_all(b"\n");
                                     let _ = stdout.write_all(prompt.as_bytes());
                                     let _ = stdout.write_all(&buffer);
