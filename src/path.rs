@@ -547,4 +547,63 @@ mod tests {
             Vec::<String>::new()
         );
     }
+
+    // --- complete_filename: nested-path scenarios (layer 10) ----------------
+    // `complete_filename` itself didn't change for layer 10 — the editor
+    // resolves `cwd.join(dir_part)` and passes the resulting directory in.
+    // These tests pin the behaviour at the unit level explicitly.
+
+    #[test]
+    fn complete_filename_works_when_dir_is_a_subdirectory() {
+        // Mirrors the codecrafters layer-10 scenario: caller passes a
+        // resolved nested directory (cwd.join("path/to/")), and the function
+        // lists entries inside it as plain filenames.
+        let root = TempDir::new();
+        fs::create_dir_all(root.path().join("path/to")).unwrap();
+        let nested = root.path().join("path/to");
+        let file = nested.join("file.txt");
+        fs::write(&file, b"").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert_eq!(complete_filename("f", &nested), vec!["file.txt"]);
+    }
+
+    #[test]
+    fn complete_filename_only_lists_immediate_entries_not_recursive() {
+        // Even when the search dir is nested, the listing is one level only —
+        // entries inside nested subdirs are NOT included. (Important: the
+        // editor's split is what walks the path; complete_filename itself
+        // is non-recursive.)
+        let root = TempDir::new();
+        fs::create_dir_all(root.path().join("inner")).unwrap();
+        let inner = root.path().join("inner");
+        fs::write(inner.join("file.txt"), b"").unwrap();
+        fs::set_permissions(&inner.join("file.txt"), fs::Permissions::from_mode(0o644)).unwrap();
+
+        // Searching the root with prefix "f" must NOT find inner/file.txt.
+        assert!(
+            complete_filename("f", root.path()).is_empty(),
+            "complete_filename should not recurse into subdirectories",
+        );
+    }
+
+    #[test]
+    fn complete_filename_empty_prefix_in_nested_dir_lists_all() {
+        // The 'cat path/to/<TAB>' case: prefix_part is "", search dir is the
+        // resolved nested directory. Returns everything in it, sorted.
+        let root = TempDir::new();
+        fs::create_dir_all(root.path().join("path/to")).unwrap();
+        let nested = root.path().join("path/to");
+        fs::write(nested.join("alpha.txt"), b"").unwrap();
+        fs::write(nested.join("beta.txt"), b"").unwrap();
+        fs::write(nested.join("gamma.txt"), b"").unwrap();
+        fs::set_permissions(&nested.join("alpha.txt"), fs::Permissions::from_mode(0o644)).unwrap();
+        fs::set_permissions(&nested.join("beta.txt"), fs::Permissions::from_mode(0o644)).unwrap();
+        fs::set_permissions(&nested.join("gamma.txt"), fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert_eq!(
+            complete_filename("", &nested),
+            vec!["alpha.txt", "beta.txt", "gamma.txt"],
+        );
+    }
 }

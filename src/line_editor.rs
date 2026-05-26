@@ -95,7 +95,15 @@ pub fn read_line(prompt: &str, builtins: &[&str]) -> Option<String> {
 
                         let segment = &buffer_str[segment_start..];
 
-                        let matches = if segment_start == 0 {
+                        let (dir_part, prefix_part) = match segment.rfind('/') {
+                            Some(i) => (&segment[..=i], &segment[i + 1..]),
+                            None => ("", segment),
+                        };
+
+                        let matches = if !dir_part.is_empty() {
+                            let cwd = env::current_dir().unwrap_or_default();
+                            complete_filename(prefix_part, &cwd.join(dir_part))
+                        } else if segment_start == 0 {
                             complete_command(segment, builtins, env::var_os("PATH").as_deref())
                         } else {
                             let cwd = env::current_dir().unwrap_or_default();
@@ -108,7 +116,7 @@ pub fn read_line(prompt: &str, builtins: &[&str]) -> Option<String> {
                                 let _ = stdout.flush();
                             }
                             1 => {
-                                let suffix_bytes = matches[0][segment.len()..].as_bytes();
+                                let suffix_bytes = matches[0][prefix_part.len()..].as_bytes();
                                 let _ = stdout.write_all(suffix_bytes);
                                 let _ = stdout.write_all(b" ");
                                 let _ = stdout.flush();
@@ -117,8 +125,8 @@ pub fn read_line(prompt: &str, builtins: &[&str]) -> Option<String> {
                             }
                             _ => {
                                 let lcp = longest_common_prefix(&matches);
-                                if lcp > segment.len() {
-                                    let suffix = &matches[0][segment.len()..lcp];
+                                if lcp > prefix_part.len() {
+                                    let suffix = &matches[0][prefix_part.len()..lcp];
                                     let suffix_bytes = suffix.as_bytes();
                                     let _ = stdout.write_all(suffix_bytes);
                                     let _ = stdout.flush();

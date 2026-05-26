@@ -334,6 +334,35 @@ set ::env(PATH) $orig_path
 exec rm -rf $tmp
 set ::env(PATH) ""
 
+# --- nested-path completion (layer 10) --------------------------------------
+# Tab on an argument that contains a '/'. The shell splits at the last slash:
+# everything up to it is the directory (relative to cwd), everything after
+# is the filename prefix. The buffer's path-part stays put; only the missing
+# filename suffix is appended, plus a trailing space.
+
+set ::env(PATH) $orig_path
+set tmp [exec mktemp -d]
+exec mkdir -p "$tmp/path/to"
+exec touch "$tmp/path/to/file.txt"
+set ::env(PATH) ""
+
+set saved_cwd [pwd]
+cd $tmp
+
+# Codecrafters scenario: 'cat path/to/f' + Tab -> 'cat path/to/file.txt '
+boot
+send "cat path/to/f\t"
+expect {
+    -ex "ile.txt " { pass "nested: 'cat path/to/f' + Tab -> 'cat path/to/file.txt ' (trailing space)" }
+    timeout        { fail "nested: 'cat path/to/f'" "completion suffix not seen" }
+}
+shutdown
+
+cd $saved_cwd
+set ::env(PATH) $orig_path
+exec rm -rf $tmp
+set ::env(PATH) ""
+
 # --- Backspace edits the buffer ---------------------------------------------
 # 'pwdX' + Backspace -> 'pwd'; pwd runs only if the X was actually removed.
 
