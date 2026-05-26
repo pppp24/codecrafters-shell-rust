@@ -4,7 +4,7 @@ use std::{
     ffi::OsStr,
     fs::{self, Metadata},
     os::unix::fs::PermissionsExt,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 pub fn longest_common_prefix(matches: &[String]) -> usize {
@@ -84,6 +84,26 @@ pub fn complete_command(prefix: &str, builtins: &[&str], paths: Option<&OsStr>) 
     out.sort();
 
     return out;
+}
+
+pub fn complete_filename(prefix: &str, cwd: &Path) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let Ok(entries) = fs::read_dir(cwd) else {
+        return out;
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        if name_str.starts_with(prefix) {
+            out.push(name_str.to_string())
+        }
+    }
+
+    out.sort();
+    out
 }
 
 #[cfg(test)]
@@ -415,5 +435,116 @@ mod tests {
         let m = s(&["xyz_foo", "xyz_foo_bar"]);
         let lcp = longest_common_prefix(&m);
         assert_eq!(&m[0][..lcp], "xyz_foo");
+    }
+
+    // --- complete_filename --------------------------------------------------
+
+    #[test]
+    fn complete_filename_empty_dir_returns_empty() {
+        let dir = TempDir::new();
+        assert_eq!(
+            complete_filename("re", dir.path()),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn complete_filename_single_match_codecrafters() {
+        // The first codecrafters layer-9 scenario: 'cat re<TAB>' -> readme.txt.
+        let dir = TempDir::new();
+        dir.touch_plain("readme.txt");
+        assert_eq!(
+            complete_filename("re", dir.path()),
+            vec!["readme.txt"]
+        );
+    }
+
+    #[test]
+    fn complete_filename_prefix_filters_correctly() {
+        let dir = TempDir::new();
+        dir.touch_plain("readme.txt");
+        dir.touch_plain("hello.py");
+        assert_eq!(
+            complete_filename("re", dir.path()),
+            vec!["readme.txt"]
+        );
+    }
+
+    #[test]
+    fn complete_filename_second_codecrafters_scenario() {
+        let dir = TempDir::new();
+        dir.touch_plain("readme.txt");
+        dir.touch_plain("hello_world.py");
+        assert_eq!(
+            complete_filename("hello", dir.path()),
+            vec!["hello_world.py"]
+        );
+    }
+
+    #[test]
+    fn complete_filename_empty_prefix_lists_all_sorted() {
+        let dir = TempDir::new();
+        dir.touch_plain("zeta");
+        dir.touch_plain("alpha");
+        dir.touch_plain("mu");
+        assert_eq!(
+            complete_filename("", dir.path()),
+            vec!["alpha", "mu", "zeta"]
+        );
+    }
+
+    #[test]
+    fn complete_filename_multi_match_sorted() {
+        let dir = TempDir::new();
+        dir.touch_plain("readme.txt");
+        dir.touch_plain("readme.md");
+        assert_eq!(
+            complete_filename("re", dir.path()),
+            vec!["readme.md", "readme.txt"]
+        );
+    }
+
+    #[test]
+    fn complete_filename_includes_directories() {
+        // Directories are candidates too — directory completion's `/` marker
+        // is a deferred future stage; this layer treats all entries equally.
+        let dir = TempDir::new();
+        dir.mkdir("results");
+        assert_eq!(
+            complete_filename("re", dir.path()),
+            vec!["results"]
+        );
+    }
+
+    #[test]
+    fn complete_filename_no_exec_bit_filter() {
+        // Unlike `complete_command`, filename completion does NOT require the
+        // executable bit. A non-executable file is still a valid candidate.
+        let dir = TempDir::new();
+        dir.touch_plain("readme.txt"); // mode 0o644, no exec
+        assert_eq!(
+            complete_filename("re", dir.path()),
+            vec!["readme.txt"]
+        );
+    }
+
+    #[test]
+    fn complete_filename_no_match_returns_empty() {
+        let dir = TempDir::new();
+        dir.touch_plain("readme.txt");
+        assert_eq!(
+            complete_filename("xyz", dir.path()),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn complete_filename_nonexistent_cwd_returns_empty() {
+        // Bad cwd is silent — no panic, just empty Vec.
+        let bogus = Path::new("/nonexistent_dir_for_completion_test");
+        assert_eq!(
+            complete_filename("re", bogus),
+            Vec::<String>::new()
+        );
     }
 }

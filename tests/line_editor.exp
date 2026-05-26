@@ -26,7 +26,9 @@
 
 cd [file join [file dirname [info script]] ..]
 
-set SHELL_BIN "./target/debug/codecrafters-shell"
+# Absolute path so tests that `cd` into a tempdir (filename completion)
+# can still spawn the binary.
+set SHELL_BIN [file normalize "./target/debug/codecrafters-shell"]
 set timeout 5
 log_user 0
 
@@ -282,6 +284,52 @@ expect {
 }
 shutdown
 
+set ::env(PATH) $orig_path
+exec rm -rf $tmp
+set ::env(PATH) ""
+
+# --- filename completion (layer 9) ------------------------------------------
+# Tab on an argument (text after a space) completes filenames from cwd.
+# Spawn the shell with cwd set to a tempdir containing the test files; the
+# shell calls env::current_dir() at Tab time, so its view of cwd is whatever
+# Tcl's cwd was at the moment of `spawn`.
+
+set ::env(PATH) $orig_path
+set tmp [exec mktemp -d]
+exec touch "$tmp/readme.txt" "$tmp/hello_world.py"
+set ::env(PATH) ""
+
+set saved_cwd [pwd]
+cd $tmp
+
+# Codecrafters scenario 1: 'cat re' + Tab -> 'cat readme.txt '
+boot
+send "cat re\t"
+expect {
+    -ex "adme.txt " { pass "filename: 'cat re' + Tab -> 'cat readme.txt ' (trailing space)" }
+    timeout         { fail "filename: 'cat re'" "completion suffix not seen" }
+}
+shutdown
+
+# Codecrafters scenario 2: 'cat hello' + Tab -> 'cat hello_world.py '
+boot
+send "cat hello\t"
+expect {
+    -ex "_world.py " { pass "filename: 'cat hello' + Tab -> 'cat hello_world.py ' (trailing space)" }
+    timeout          { fail "filename: 'cat hello'" "completion suffix not seen" }
+}
+shutdown
+
+# Non-existent command word — argument completion still fires.
+boot
+send "xyz read\t"
+expect {
+    -ex "me.txt " { pass "filename: 'xyz read' + Tab completes the arg regardless of command validity" }
+    timeout       { fail "filename: 'xyz read'" "completion suffix not seen" }
+}
+shutdown
+
+cd $saved_cwd
 set ::env(PATH) $orig_path
 exec rm -rf $tmp
 set ::env(PATH) ""

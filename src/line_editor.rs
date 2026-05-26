@@ -4,7 +4,7 @@ use std::{
     mem::MaybeUninit,
 };
 
-use crate::path::{complete_command, longest_common_prefix};
+use crate::path::{complete_command, complete_filename, longest_common_prefix};
 
 pub struct RawMode {
     original: libc::termios,
@@ -90,16 +90,25 @@ pub fn read_line(prompt: &str, builtins: &[&str]) -> Option<String> {
                 }
 
                 b'\t' => {
-                    if let Ok(prefix) = str::from_utf8(&buffer[..]) {
-                        let matches =
-                            complete_command(prefix, builtins, env::var_os("PATH").as_deref());
+                    if let Ok(buffer_str) = str::from_utf8(&buffer[..]) {
+                        let segment_start = buffer_str.rfind(' ').map_or(0, |i| i + 1);
+
+                        let segment = &buffer_str[segment_start..];
+
+                        let matches = if segment_start == 0 {
+                            complete_command(segment, builtins, env::var_os("PATH").as_deref())
+                        } else {
+                            let cwd = env::current_dir().unwrap_or_default();
+                            complete_filename(segment, &cwd)
+                        };
+
                         match matches.len() {
                             0 => {
                                 let _ = stdout.write_all(b"\x07");
                                 let _ = stdout.flush();
                             }
                             1 => {
-                                let suffix_bytes = matches[0][prefix.len()..].as_bytes();
+                                let suffix_bytes = matches[0][segment.len()..].as_bytes();
                                 let _ = stdout.write_all(suffix_bytes);
                                 let _ = stdout.write_all(b" ");
                                 let _ = stdout.flush();
@@ -108,8 +117,8 @@ pub fn read_line(prompt: &str, builtins: &[&str]) -> Option<String> {
                             }
                             _ => {
                                 let lcp = longest_common_prefix(&matches);
-                                if lcp > prefix.len() {
-                                    let suffix = &matches[0][prefix.len()..lcp];
+                                if lcp > segment.len() {
+                                    let suffix = &matches[0][segment.len()..lcp];
                                     let suffix_bytes = suffix.as_bytes();
                                     let _ = stdout.write_all(suffix_bytes);
                                     let _ = stdout.flush();
